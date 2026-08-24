@@ -80,7 +80,7 @@ if not getattr(_np.random, "_seed_guard_installed", False):
 import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fedartml_local"))
 from fedartml_local.fl_modality_heterogeneity import ModalityHeterogeneity
-from  fedartml_local.fedartml_patch import SplitAsFederatedData
+from fedartml_local.fedartml_patch import SplitAsFederatedData
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -96,12 +96,18 @@ def build_config(args):
     cfg.SEEDS = [1, 42, 123, 512, 999]
     cfg.NUM_CLASSES = 6
     cfg.BATCH_SIZE = 64
-    cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.IMG_SIZE = 64
     cfg.IMG_DIM = cfg.IMG_SIZE * cfg.IMG_SIZE * 3
     cfg.N_MFCC = 40
     cfg.AUD_DIM = cfg.N_MFCC * 2
+
+    if args.device is not None:
+        cfg.DEVICE = args.device
+        if cfg.DEVICE.startswith("cuda") and not torch.cuda.is_available():
+            sys.exit(f"--device {cfg.DEVICE} was requested but CUDA isn't available on this machine.")
+    else:
+        cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 30
@@ -1012,6 +1018,9 @@ def main():
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_cremad_v6.py",
                          help="Where to write the final results summary")
+    parser.add_argument("--device", default=None,
+                         help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
+                              "Defaults to 'cuda' (first visible GPU) if available, else 'cpu'.")
     args = parser.parse_args()
 
     cfg = build_config(args)

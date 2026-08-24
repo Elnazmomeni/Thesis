@@ -49,19 +49,24 @@ Pick whichever source actually works from that server:
 python download_data.py --method zenodo --out ./CREMA-D
 
 # Option B — Kaggle
-export KAGGLE_USERNAME=your_username
-export KAGGLE_KEY=your_key
+mkdir -p ~/.kaggle
+echo YOUR_KAGGLE_TOKEN > ~/.kaggle/access_token
+chmod 600 ~/.kaggle/access_token
 python download_data.py --method kaggle --out ./CREMA-D
 ```
 
-**About the Kaggle key**: your original notebook had a real Kaggle API key
-hardcoded directly in the code (`os.environ['KAGGLE_API_TOKEN'] = '...'`).
-Two problems with that: (1) it's now been exposed in plaintext in a file
-you shared, so please rotate it at kaggle.com → Account → your API tokens;
-(2) `KAGGLE_API_TOKEN` isn't actually the variable name the Kaggle CLI
-reads, so that line probably wasn't authenticating anything anyway. Use
-`KAGGLE_USERNAME` / `KAGGLE_KEY` (shown above), or drop a `kaggle.json`
-into `~/.kaggle/kaggle.json` — never commit credentials into the script.
+Get `YOUR_KAGGLE_TOKEN` from kaggle.com → Settings → API → "Create New
+Token" (it looks like `KGAT_...`). Generate it and paste it into the file
+directly on the server — never hardcode it in a script or share it in a
+chat/message, since anywhere it's been typed in plaintext should be
+considered exposed and rotated.
+
+**About the key that was in your original notebook**: it was hardcoded
+directly in the code (`os.environ['KAGGLE_API_TOKEN'] = '...'`), which
+means it's already been exposed. Please expire it at kaggle.com → Settings
+→ API and generate a fresh one to use going forward. `download_data.py`
+also accepts `export KAGGLE_API_TOKEN=your_token` as an environment
+variable if you'd rather not use the file.
 
 ## 3. Run training
 
@@ -88,6 +93,20 @@ All CLI options (all optional, shown with their defaults):
 | `--images-dir` | `./images_cremad_v6` | Where output figures are saved |
 | `--checkpoint-path` | `./checkpoints/client_sweep_ckpt.pkl` | Client-sweep checkpoint — the script **auto-resumes** from here if interrupted |
 | `--results-out` | `./results_output_cremad_v6.py` | Final results summary file |
+| `--device` | auto (`cuda` if available, else `cpu`) | Which GPU to use, e.g. `cuda:0` or `cuda:1` on a multi-GPU box, or `cpu` |
+
+## Picking a GPU on a multi-GPU server
+
+If the server has more than one GPU, tell PyTorch which one to use with
+`--device` instead of editing the script:
+
+```bash
+python train_cremad.py --cremad-path ./CREMA-D --device cuda:0
+python train_cremad.py --cremad-path ./CREMA-D --device cuda:1
+```
+
+Run `nvidia-smi` on the server first to see which GPUs exist and how busy
+each one is, so you don't accidentally pile two jobs onto the same card.
 
 ## What the script actually runs
 
