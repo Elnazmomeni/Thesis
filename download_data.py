@@ -15,20 +15,25 @@ Usage
 
 Kaggle credentials
 -------------------
-Do NOT hardcode your Kaggle key in this file or anywhere in the repo.
-Instead, either:
-  1. Place a kaggle.json file at ~/.kaggle/kaggle.json (standard Kaggle CLI
-     way — download it from kaggle.com -> Account -> Create New API Token), or
-  2. Export two environment variables before running this script:
-        export KAGGLE_USERNAME=your_username
-        export KAGGLE_KEY=your_key
+Do NOT hardcode your Kaggle token in this file or anywhere in the repo.
+Kaggle's current API uses a single access token (looks like "KGAT_..."),
+generated from kaggle.com -> Settings -> API -> "Create New Token". Use it
+one of two ways:
+  1. Save it to a file at ~/.kaggle/access_token:
+        mkdir -p ~/.kaggle
+        echo YOUR_TOKEN > ~/.kaggle/access_token
+        chmod 600 ~/.kaggle/access_token
+  2. Or export it as an environment variable before running this script:
+        export KAGGLE_API_TOKEN=YOUR_TOKEN
 
-NOTE: your original notebook set an env var called KAGGLE_API_TOKEN with a
-hardcoded key. That variable name isn't actually read by the Kaggle CLI
-(it expects KAGGLE_USERNAME / KAGGLE_KEY or the kaggle.json file), so that
-line likely wasn't doing anything useful. Also, that key was a real,
-exposed credential — please rotate it on kaggle.com since it's now been
-shared in plaintext.
+Either way, generate the token directly on the server (or paste it into a
+file/terminal there) — never hardcode it in a script or paste it into a
+chat, since anywhere it's been typed in plaintext should be treated as
+exposed and rotated.
+
+(Older Kaggle accounts may instead use a kaggle.json with separate
+"username"/"key" fields under ~/.kaggle/kaggle.json — that also still works
+and doesn't need any extra setup here.)
 """
 
 import argparse
@@ -65,13 +70,16 @@ def download_zenodo(out_dir):
 
 
 def download_kaggle(out_dir):
-    have_env_creds = "KAGGLE_USERNAME" in os.environ and "KAGGLE_KEY" in os.environ
+    have_token_env = "KAGGLE_API_TOKEN" in os.environ
+    have_token_file = os.path.exists(os.path.expanduser("~/.kaggle/access_token"))
     have_json = os.path.exists(os.path.expanduser("~/.kaggle/kaggle.json"))
-    if not (have_env_creds or have_json):
+    have_legacy_env = "KAGGLE_USERNAME" in os.environ and "KAGGLE_KEY" in os.environ
+    if not (have_token_env or have_token_file or have_json or have_legacy_env):
         sys.exit(
-            "No Kaggle credentials found. Set KAGGLE_USERNAME + KAGGLE_KEY "
-            "env vars, or place ~/.kaggle/kaggle.json. See the docstring "
-            "at the top of this file."
+            "No Kaggle credentials found. Set KAGGLE_API_TOKEN, or place "
+            "~/.kaggle/access_token (new token-based auth), or "
+            "~/.kaggle/kaggle.json (legacy username/key auth). "
+            "See the docstring at the top of this file."
         )
 
     run([sys.executable, "-m", "pip", "install", "-q", "--break-system-packages", "kaggle"])
