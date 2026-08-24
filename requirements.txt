@@ -16,4 +16,7 @@ fedartml
 matplotlib
 
 # Misc used by the pipeline
-psutil
+Psutil
+
+click
+
