@@ -1,0 +1,19 @@
+# Core ML
+torch
+scikit-learn
+numpy
+pandas
+tqdm
+
+# Feature extraction
+opencv-python-headless   # headless variant: no GUI/display deps, safer on a remote server
+librosa
+
+# Distance metrics used by fedartml_local/fedartml_patch.py
+fedartml
+
+# Plotting
+matplotlib
+
+# Misc used by the pipeline
+psutil
