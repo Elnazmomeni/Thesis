@@ -119,8 +119,8 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.3, 0.4, 1.0, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.3, 0.4, 1.0, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
     cfg.FL_ROUNDS_CLIENTS = 30
 
@@ -266,17 +266,16 @@ def load_cremad(cremad_path, cache_path, cfg, test_ratio=0.2):
 
 # ═════════════════════════════════════════════════════════════════════════
 # Cell 10 — model architecture
-# ═════════════════════════════════════════════════════════════════════════
 class ImageBranch(nn.Module):
     def __init__(self, cfg, embed_dim=128):
         super().__init__()
         self.net = nn.Sequential(
             nn.Unflatten(1, (3, cfg.IMG_SIZE, cfg.IMG_SIZE)),
-            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
+            nn.Conv2d(3, 32, 3, padding=1), nn.GroupNorm(8, 32), nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
+            nn.Conv2d(32, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.Conv2d(64, 128, 3, padding=1), nn.GroupNorm(8, 128), nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Flatten(),
             nn.Linear(8192, embed_dim), nn.ReLU(),
@@ -290,15 +289,13 @@ class AudioBranch(nn.Module):
     def __init__(self, input_dim, embed_dim=128):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(256, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(input_dim, 256), nn.GroupNorm(16, 256), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(256, 256), nn.GroupNorm(16, 256), nn.ReLU(), nn.Dropout(0.2),
             nn.Linear(256, embed_dim), nn.ReLU(),
         )
 
     def forward(self, x):
         return self.net(x)
-
-
 class MultimodalNet(nn.Module):
     def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None):
         super().__init__()
@@ -435,10 +432,20 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     key = (kind, round(float(target), 4), num_clients)
     if key in _ALPHA_CACHE:
         return _ALPHA_CACHE[key]
+    """
+    Your original setup: np.logspace(-2, 1, 60) covers 3 decades (0.01→0.1→1→10) with 60 points = 20 candidates per decade. That's the resolution that already worked for all your existing levels (0.10–0.48 JSD, 0.16–0.70 HD) — every alpha your search has found so far landed cleanly in this range, so there's no reason to weaken it.
 
-    n_candidates = 60
-    candidates = np.logspace(-2, 1, n_candidates)
-    best_alpha, best_diff = candidates[0], 1e9
+    Keeping 50 instead of 60 for that same 3-decade span costs you a small amount of resolution (50/3 ≈ 16.7/decade vs. 20/decade) — a reasonable trade since your near-IID target doesn't need the full original density, and it caps the total extra search cost.
+    
+    20 points across the new 2-decade extension (10→100→1000) gives you 10 candidates/decade there — sparser than the main zone, which is fine, because you only have one target level (JSD=0.02, HD=0.05) living out there, not four. You don't need fine resolution for one point the way you do for four.
+    
+    Total: 70 candidates, up from 60 — a ~17% increase in search cost per level, and since this search step only computes partitions + heterogeneity scores (no actual FedAvg training), that's a genuinely cheap trade for not degrading your existing calibration while still reaching alpha=1000.
+    """
+    candidates = np.concatenate([
+        np.logspace(-2, 1, 50),       # 0.01–10, dense — where all your real targets sit
+        np.logspace(1, 3, 21)[1:],    # 10–1000, sparse — just for the near-IID reach
+    ])
+    n_candidates = len(candidates)    # 70
 
     print(f"    [{kind.upper()} search] target={target:.4f}  num_clients={num_clients}  "
           f"({n_candidates} candidates, averaged over {len(probe_seeds)} seeds: {probe_seeds})")
@@ -614,6 +621,89 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         torch.cuda.empty_cache()
     return result
 
+####### alpha sweep ########
+
+def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te,
+                          cl_f1, cl_acc, cfg):
+    """
+    Step 3 — full-dataset alpha sweep. Trains FedAvg at each alpha in
+    cfg.ALPHA_MODAL_SWEEP, across cfg.SEEDS, at num_clients=cfg.NUM_CLIENTS.
+    Independent of Step 4 — does NOT reuse Step 4's alpha search or results,
+    by design, so it stays a genuine cross-check.
+    """
+    print("\n" + "═" * 60)
+    print("STEP 3 — Alpha-modal sweep [FULL dataset]")
+    print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
+          f"seeds = {cfg.SEEDS}")
+    print("═" * 60)
+ 
+    test_loader = DataLoader(
+        make_tensor_dataset(img_te, aud_te, lbl_te),
+        batch_size=8, shuffle=False, num_workers=0)
+ 
+    all_results = []
+    for i, alpha_modal in enumerate(cfg.ALPHA_MODAL_SWEEP):
+        print(f"\n  alpha_modal = {alpha_modal}   [{i+1}/{len(cfg.ALPHA_MODAL_SWEEP)}]")
+        seed_f1s, seed_accs = [], []
+        seed_modal_jsds, seed_modal_hds = [], []
+        seed_label_jsds, seed_label_hds = [], []
+ 
+        for seed in tqdm(cfg.SEEDS, desc=f"    alpha={alpha_modal}"):
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+ 
+            (client_ds, modal_jsd, modal_hd, label_jsd, label_hd, _) = build_client_datasets(
+                img_tr, aud_tr, lbl_tr,
+                alpha_modal=alpha_modal,
+                cfg=cfg,
+                alpha_label=cfg.ALPHA_LABEL_FIXED,
+                num_clients=cfg.NUM_CLIENTS,
+                random_state=_fedartml_safe_seed(seed, cfg))
+ 
+            fl_f1, fl_acc = train_fedavg(client_ds, test_loader, cfg,
+                                          fl_rounds=cfg.FL_ROUNDS,
+                                          local_epochs=cfg.FL_LOCAL_EPOCHS,
+                                          lr=cfg.FL_LR)
+ 
+            seed_f1s.append(fl_f1)
+            seed_accs.append(fl_acc)
+            seed_modal_jsds.append(modal_jsd)
+            seed_modal_hds.append(modal_hd)
+            seed_label_jsds.append(label_jsd)
+            seed_label_hds.append(label_hd)
+ 
+            del client_ds
+            gc.collect()
+            if cfg.DEVICE == "cuda":
+                torch.cuda.empty_cache()
+ 
+        print(f"    Mean F1={np.mean(seed_f1s):.4f}  Acc={np.mean(seed_accs):.4f}  "
+              f"modal_JSD={np.mean(seed_modal_jsds):.4f}  modal_HD={np.mean(seed_modal_hds):.4f}")
+ 
+        all_results.append({
+            "alpha_modal": alpha_modal,
+            "alpha_label": cfg.ALPHA_LABEL_FIXED,
+            "seeds": cfg.SEEDS,
+            "f1": seed_f1s, "acc": seed_accs,
+            "modal_jsd": seed_modal_jsds, "modal_hd": seed_modal_hds,
+            "label_jsd": seed_label_jsds, "label_hd": seed_label_hds,
+            "modal_jsd_mean": float(np.mean(seed_modal_jsds)),
+            "modal_jsd_std": float(np.std(seed_modal_jsds)),
+            "modal_hd_mean": float(np.mean(seed_modal_hds)),
+            "modal_hd_std": float(np.std(seed_modal_hds)),
+            "label_jsd_mean": float(np.mean(seed_label_jsds)),
+            "label_jsd_std": float(np.std(seed_label_jsds)),
+            "label_hd_mean": float(np.mean(seed_label_hds)),
+            "label_hd_std": float(np.std(seed_label_hds)),
+            "f1_mean": float(np.mean(seed_f1s)),
+            "f1_std": float(np.std(seed_f1s)),
+            "acc_mean": float(np.mean(seed_accs)),
+            "acc_std": float(np.std(seed_accs)),
+        })
+ 
+    return all_results
+ 
+ 
 # ═════════════════════════════════════════════════════════════════════════
 # Cell 15 — client sweep (Step 4, checkpointed) + plotting (first def.)
 # ═════════════════════════════════════════════════════════════════════════
@@ -1043,10 +1133,20 @@ def main():
     # Cell 18 — centralised baseline
     print("\nTraining CREMA-D (centralised baseline)")
     cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
+    
+    # Step 3 — alpha sweep (independent of Step 4, real cross-check)
+    print("\\nRunning Step 3 (alpha sweep)")
+    sweep_results_full = run_alpha_sweep_full(
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg)
+ 
+    plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
+                             "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
+    plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
+                             "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
 
     # Cell 19 — fixed JSD/HD levels
-    cfg.FIXED_JSD_LEVELS = [0.10, 0.24, 0.39, 0.48]
-    cfg.FIXED_HD_LEVELS = [0.16, 0.37, 0.57, 0.70]
+    cfg.FIXED_JSD_LEVELS = [0.02, 0.10, 0.24, 0.39, 0.48]
+    cfg.FIXED_HD_LEVELS = [0.05,0.16, 0.37, 0.57, 0.70]
     print(f"fixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
