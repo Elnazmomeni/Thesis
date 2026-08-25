@@ -79,8 +79,8 @@ if not getattr(_np.random, "_seed_guard_installed", False):
 # ─────────────────────────────────────────────────────────────────────────
 import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fedartml_local"))
-from fedartml_local.fl_modality_heterogeneity import ModalityHeterogeneity
-from fedartml_local.fedartml_patch import SplitAsFederatedData
+from fl_modality_heterogeneity import ModalityHeterogeneity
+from fedartml_patch import SplitAsFederatedData
 
 
 # ═════════════════════════════════════════════════════════════════════════
