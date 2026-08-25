@@ -442,10 +442,11 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     Total: 70 candidates, up from 60 — a ~17% increase in search cost per level, and since this search step only computes partitions + heterogeneity scores (no actual FedAvg training), that's a genuinely cheap trade for not degrading your existing calibration while still reaching alpha=1000.
     """
     candidates = np.concatenate([
-        np.logspace(-2, 1, 50),       # 0.01–10, dense — where all your real targets sit
-        np.logspace(1, 3, 21)[1:],    # 10–1000, sparse — just for the near-IID reach
+    np.logspace(-2, 1, 50),
+    np.logspace(1, 3, 21)[1:],
     ])
     n_candidates = len(candidates)    # 70
+    best_alpha, best_diff = candidates[0], 1e9
 
     print(f"    [{kind.upper()} search] target={target:.4f}  num_clients={num_clients}  "
           f"({n_candidates} candidates, averaged over {len(probe_seeds)} seeds: {probe_seeds})")
