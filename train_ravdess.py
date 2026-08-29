@@ -128,10 +128,8 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.3, 0.4, 1.0, 1000]
-    # CLIENT_SWEEP: your notebook split this into [4,6,10] then [20] across
-    # two Colab cells to respect session limits. On a server you don't need
-    # that split — run the whole thing in one go.
+    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
     cfg.FL_ROUNDS_CLIENTS = 30
 
