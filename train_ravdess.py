@@ -285,55 +285,77 @@ def load_ravdess(ravdess_path, cache_path, cfg, test_ratio=0.2):
 # Model architecture — FIX 1: BatchNorm -> GroupNorm
 # ═════════════════════════════════════════════════════════════════════════
 class ImageBranch(nn.Module):
-    def __init__(self, cfg, embed_dim=128):
+    def __init__(self, cfg, embed_dim=128, use_batchnorm=False):
         super().__init__()
+ 
+        def norm(num_groups, num_channels):
+            if use_batchnorm:
+                return nn.BatchNorm2d(num_channels)
+            return nn.GroupNorm(num_groups, num_channels)
+ 
         self.net = nn.Sequential(
             nn.Unflatten(1, (3, cfg.IMG_SIZE, cfg.IMG_SIZE)),
-            nn.Conv2d(3, 32, 3, padding=1), nn.GroupNorm(8, 32), nn.ReLU(),
+            nn.Conv2d(3, 32, 3, padding=1), norm(8, 32), nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.ReLU(),
+            nn.Conv2d(32, 64, 3, padding=1), norm(8, 64), nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.GroupNorm(8, 128), nn.ReLU(),
+            nn.Conv2d(64, 128, 3, padding=1), norm(8, 128), nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Flatten(),
             nn.Linear(8192, embed_dim), nn.ReLU(),
         )
-
+ 
     def forward(self, x):
         return self.net(x)
-
+ 
+ 
 
 class AudioBranch(nn.Module):
-    def __init__(self, input_dim, embed_dim=128):
+    def __init__(self, input_dim, embed_dim=128, use_batchnorm=False):
         super().__init__()
+ 
+        def norm(num_groups, num_channels):
+            if use_batchnorm:
+                return nn.BatchNorm1d(num_channels)
+            return nn.GroupNorm(num_groups, num_channels)
+ 
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 256), nn.GroupNorm(16, 256), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(256, 256), nn.GroupNorm(16, 256), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(input_dim, 256), norm(16, 256), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(256, 256), norm(16, 256), nn.ReLU(), nn.Dropout(0.2),
             nn.Linear(256, embed_dim), nn.ReLU(),
         )
-
+ 
     def forward(self, x):
         return self.net(x)
-
-
+ 
 class MultimodalNet(nn.Module):
-    def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None):
+    def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None,
+                 use_batchnorm=False):
         super().__init__()
         aud_input_dim = aud_input_dim or cfg.AUD_DIM
-        self.img_branch = ImageBranch(cfg, embed_dim)
-        self.aud_branch = AudioBranch(aud_input_dim, embed_dim)
+        self.img_branch = ImageBranch(cfg, embed_dim, use_batchnorm=use_batchnorm)
+        self.aud_branch = AudioBranch(aud_input_dim, embed_dim, use_batchnorm=use_batchnorm)
         self.classifier = nn.Sequential(
             nn.Linear(embed_dim * 2, 256), nn.ReLU(), nn.Dropout(0.3),
             nn.Linear(256, num_classes),
         )
-
+ 
     def forward(self, img, aud):
         return self.classifier(torch.cat([self.img_branch(img), self.aud_branch(aud)], dim=1))
-
-
-def make_model(cfg):
+ 
+ 
+def make_model(cfg, use_batchnorm=False):
+    """
+    use_batchnorm=True  -> CL baseline (full, stable batch sizes; BatchNorm
+                            gives its normal, usually-better performance)
+    use_batchnorm=False -> everything federated (client models can see
+                            tiny/degenerate batches; GroupNorm avoids the
+                            running-stats corruption seen in the CREMA-D
+                            client=4 collapse)
+    """
     return MultimodalNet(cfg, num_classes=cfg.NUM_CLASSES, embed_dim=128,
-                          aud_input_dim=cfg.AUD_DIM).to(cfg.DEVICE)
+                          aud_input_dim=cfg.AUD_DIM,
+                          use_batchnorm=use_batchnorm).to(cfg.DEVICE)
 
 
 def make_tensor_dataset(img, aud, labels):
@@ -543,7 +565,7 @@ def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
                               batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=0,
                               pin_memory=(cfg.DEVICE == "cuda"))
 
-    model = make_model(cfg)
+    model = make_model(cfg, use_batchnorm=True)
     optimizer = optim.Adam(model.parameters(), lr=cfg.CL_LR, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.CL_EQUIV_EPOCHS, eta_min=1e-5)
 
