@@ -118,7 +118,7 @@ def build_config(args):
     else:
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    cfg.NUM_CLIENTS = 10
+    cfg.NUM_CLIENTS = 6
     cfg.FL_ROUNDS = 30
     cfg.FL_LOCAL_EPOCHS = 3
     cfg.FL_LR = 5e-4
@@ -132,7 +132,7 @@ def build_config(args):
     # CLIENT_SWEEP: your notebook split this into [4,6,10] then [20] across
     # two Colab cells to respect session limits. On a server you don't need
     # that split — run the whole thing in one go.
-    cfg.CLIENT_SWEEP = [4, 6, 10, 20]
+    cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
     cfg.FL_ROUNDS_CLIENTS = 30
 
     # Same as your notebook's 4 levels, PLUS a near-IID anchor point at the
