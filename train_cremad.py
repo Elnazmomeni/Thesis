@@ -1105,7 +1105,7 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_cremad_v6",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_05.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_cremad_v6.py",
                          help="Where to write the final results summary")
