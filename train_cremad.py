@@ -117,7 +117,7 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  # 90
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 1000
+    cfg.ALPHA_LABEL_FIXED = 0.5
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
