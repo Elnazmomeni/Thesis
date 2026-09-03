@@ -1087,7 +1087,7 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_ravdess",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local1.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_ravdess.py",
                          help="Where to write the final results summary")
