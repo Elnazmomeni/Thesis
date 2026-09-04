@@ -624,16 +624,10 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
 ####### alpha sweep ########
 
-def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te,
-                          cl_f1, cl_acc, cfg):
-    """
-    Step 3 — full-dataset alpha sweep. Trains FedAvg at each alpha in
-    cfg.ALPHA_MODAL_SWEEP, across cfg.SEEDS, at num_clients=cfg.NUM_CLIENTS.
-    Independent of Step 4 — does NOT reuse Step 4's alpha search or results,
-    by design, so it stays a genuine cross-check.
-    """
+def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
+                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt.pkl"):
     print("\n" + "═" * 60)
-    print("STEP 3 — Alpha-modal sweep [FULL dataset]")
+    print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
           f"seeds = {cfg.SEEDS}")
     print("═" * 60)
@@ -642,8 +636,30 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te,
         make_tensor_dataset(img_te, aud_te, lbl_te),
         batch_size=8, shuffle=False, num_workers=0)
  
-    all_results = []
+    # ── try to resume ────────────────────────────────────────────────
+    results_by_alpha = {}
+    done = set()
+    try:
+        with open(checkpoint_path, "rb") as f:
+            ckpt = pickle.load(f)
+        results_by_alpha = ckpt.get("results_by_alpha", {})
+        done = set(ckpt.get("done", set()))
+        print(f"  [resume] loaded checkpoint, {len(done)} alpha(s) already complete: "
+              f"{sorted(done)}")
+    except (FileNotFoundError, EOFError, pickle.UnpicklingError):
+        print("  [resume] no usable checkpoint found — starting fresh")
+ 
+    def _checkpoint():
+        os.makedirs(os.path.dirname(checkpoint_path) or ".", exist_ok=True)
+        with open(checkpoint_path, "wb") as f:
+            pickle.dump({"results_by_alpha": results_by_alpha, "done": done}, f)
+ 
     for i, alpha_modal in enumerate(cfg.ALPHA_MODAL_SWEEP):
+        alpha_key = round(float(alpha_modal), 6)
+        if alpha_key in done:
+            print(f"\n  [skip] alpha_modal={alpha_modal} already in checkpoint")
+            continue
+ 
         print(f"\n  alpha_modal = {alpha_modal}   [{i+1}/{len(cfg.ALPHA_MODAL_SWEEP)}]")
         seed_f1s, seed_accs = [], []
         seed_modal_jsds, seed_modal_hds = [], []
@@ -681,7 +697,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te,
         print(f"    Mean F1={np.mean(seed_f1s):.4f}  Acc={np.mean(seed_accs):.4f}  "
               f"modal_JSD={np.mean(seed_modal_jsds):.4f}  modal_HD={np.mean(seed_modal_hds):.4f}")
  
-        all_results.append({
+        results_by_alpha[alpha_key] = {
             "alpha_modal": alpha_modal,
             "alpha_label": cfg.ALPHA_LABEL_FIXED,
             "seeds": cfg.SEEDS,
@@ -700,10 +716,16 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te,
             "f1_std": float(np.std(seed_f1s)),
             "acc_mean": float(np.mean(seed_accs)),
             "acc_std": float(np.std(seed_accs)),
-        })
+        }
+        done.add(alpha_key)
+        _checkpoint()
+        print(f"  [checkpoint] saved after alpha={alpha_modal}")
  
+    # Return in the same order as cfg.ALPHA_MODAL_SWEEP, list-of-dicts,
+    # exactly matching your original function's output format — nothing
+    # downstream (plot_alpha_sweep_figure, save_results) needs to change.
+    all_results = [results_by_alpha[round(float(a), 6)] for a in cfg.ALPHA_MODAL_SWEEP]
     return all_results
- 
  
 # ═════════════════════════════════════════════════════════════════════════
 # Cell 15 — client sweep (Step 4, checkpointed) + plotting (first def.)
