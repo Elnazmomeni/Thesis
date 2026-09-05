@@ -1,34 +1,42 @@
 """
-diagnose_partitions.py — inspect per-client label / modality composition
-for specific (n_clients, JSD-or-HD target, seed) combinations.
+diagnose_sweep_summary.py — run the degenerate-client check across the FULL
+client sweep (all client counts x all JSD levels x all HD levels), instead of
+one combo at a time, and report just the summary numbers you actually need
+for the thesis: what fraction of clients are individually broken at each
+operating point.
 
-Run this on the same machine/cache as train_cremad.py:
+"Broken" (flagged) means, per client:
+    - fewer than --min-samples total samples, OR
+    - at least one emotion class with zero examples, OR
+    - image availability < --avail-threshold, OR
+    - audio availability < --avail-threshold
 
-    python diagnose_partitions.py --cremad-path ./CREMA-D --n-clients 6 --kind jsd --target 0.48
-    python diagnose_partitions.py --cremad-path ./CREMA-D --n-clients 6 --kind hd  --target 0.70
+Usage
+-----
+    python diagnose_sweep_summary.py --cremad-path ./CREMA-D
 
-It reuses build_config / load_cremad / find_alpha_for_jsd / find_alpha_for_hd /
-partition_data_fedartml directly from train_cremad.py, so it reconstructs the
-EXACT same partitions your training run used (same seeds, same alpha search).
+    # restrict to a subset (faster / for a quick check):
+    python diagnose_sweep_summary.py --cremad-path ./CREMA-D \\
+        --client-counts 4 6 10 --jsd-levels 0.02 0.24 0.48 --hd-levels 0.05 0.37 0.70
 
-What it prints, per seed:
-  - the alpha_modal the search landed on
-  - per client: sample count, per-class label histogram, and (if the
-    ModalityHeterogeneity "masks" field is in the format we expect) the
-    fraction of samples where each modality is actually present.
-  - a "<-- CHECK" flag on any client that's small, missing a class entirely,
-    or has <10% availability of a modality.
+Output
+------
+Prints a summary table (one row per n_clients x kind x level) with the
+flagged-client fraction, averaged over the 5 seeds, plus per-seed detail.
+Also writes a CSV (--out) with one row per (n_clients, kind, level, seed) so
+you can pivot/plot it however you want for the thesis appendix.
 
-IMPORTANT: the exact shape/meaning of the "masks" array depends on your
-fl_modality_heterogeneity.py implementation, which wasn't in what you shared
-with me. The script prints masks.shape and a couple of raw rows the FIRST
-time it runs so you can eyeball whether the img_avail/aud_avail numbers make
-sense before trusting them. If the shape doesn't match what's assumed below
-(masks[:, 0] = image, masks[:, 1] = audio), adjust the two lines marked
-"ADJUST IF NEEDED".
+Cost note: for each (kind, level, n_clients) combo not already in the
+in-process alpha cache, this triggers one alpha search (~70 candidates x 5
+probe seeds of build_client_datasets — partitioning + heterogeneity scoring
+only, NO FedAvg training, so it's fast) plus 5 final builds. Running the
+full default grid (5 client counts x 5 JSD levels x 5 HD levels) is 50
+combos total; expect it to take a while but nowhere near as long as
+retraining, since no neural net is ever touched here.
 """
 
 import argparse
+import csv
 import numpy as np
 import torch
 
@@ -39,15 +47,16 @@ from train_cremad import (
 from fl_modality_heterogeneity import ModalityHeterogeneity
 
 
-def diagnose(n_clients, kind, target, cfg, img_tr, aud_tr, lbl_tr, print_raw_mask_once=True):
-    print(f"\n{'='*70}\n n_clients={n_clients}   {kind.upper()}_target={target}\n{'='*70}")
-    printed_raw = not print_raw_mask_once
+def check_partition(n_clients, kind, target, cfg, img_tr, aud_tr, lbl_tr,
+                     min_samples, avail_threshold):
+    """Returns list of dicts, one per seed, with flagged-client stats."""
+    rows = []
+    finder = find_alpha_for_jsd if kind == "jsd" else find_alpha_for_hd
 
     for seed in cfg.SEEDS:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        finder = find_alpha_for_jsd if kind == "jsd" else find_alpha_for_hd
         alpha_modal = finder(target, n_clients, seed, cfg, img_tr, aud_tr, lbl_tr)
 
         rs = _fedartml_safe_seed(seed, cfg)
@@ -68,40 +77,48 @@ def diagnose(n_clients, kind, target, cfg, img_tr, aud_tr, lbl_tr, print_raw_mas
             modality_arrays={"image": all_img, "audio": all_aud},
             y=all_lbl, num_clients=n_clients, alpha=alpha_modal, prefix_cli="client")
 
-        print(f"\n  seed={seed}  alpha_modal={alpha_modal:.4f}  label_JSD={label_jsd:.4f}")
-
+        n_flagged = 0
+        flagged_reasons = []
         for i in range(n_clients):
             cname = f"client_{i+1}"
             s, e = split_starts[i], split_ends[i]
             y = joint_data[cname]["y"][s:e]
             masks = joint_data[cname]["masks"][s:e]
 
-            if not printed_raw:
-                print(f"    [debug] masks.shape={masks.shape}  masks[:3]={masks[:3]}")
-                printed_raw = True
-
             counts = np.bincount(y, minlength=cfg.NUM_CLASSES)
             n_total = len(y)
+            img_avail = float(np.mean(masks[:, 0])) if n_total else 0.0
+            aud_avail = float(np.mean(masks[:, 1])) if n_total else 0.0
 
-            img_avail = aud_avail = None
-            try:
-                # ADJUST IF NEEDED: assumes masks is (n, 2) boolean/0-1,
-                # column order matching modality_names=["image","audio"]
-                img_avail = float(np.mean(masks[:, 0]))
-                aud_avail = float(np.mean(masks[:, 1]))
-            except Exception:
-                pass
+            reasons = []
+            if n_total < min_samples:
+                reasons.append("tiny_n")
+            if counts.min() == 0:
+                reasons.append("missing_class")
+            if img_avail < avail_threshold:
+                reasons.append("no_image")
+            if aud_avail < avail_threshold:
+                reasons.append("no_audio")
 
-            bad = (
-                n_total < 10
-                or counts.min() == 0
-                or (img_avail is not None and img_avail < 0.10)
-                or (aud_avail is not None and aud_avail < 0.10)
-            )
-            flag = "  <-- CHECK" if bad else ""
-            avail_str = (f"  img_avail={img_avail:.2f}  aud_avail={aud_avail:.2f}"
-                         if img_avail is not None else "")
-            print(f"    {cname}: n={n_total:4d}  class_counts={counts.tolist()}{avail_str}{flag}")
+            if reasons:
+                n_flagged += 1
+                flagged_reasons.extend(reasons)
+
+        rows.append({
+            "n_clients": n_clients,
+            "kind": kind,
+            "target": target,
+            "seed": seed,
+            "alpha_modal": alpha_modal,
+            "label_jsd": label_jsd,
+            "label_hd": label_hd,
+            "n_flagged": n_flagged,
+            "n_total_clients": n_clients,
+            "flagged_frac": n_flagged / n_clients,
+            "reasons": ";".join(sorted(set(flagged_reasons))),
+        })
+
+    return rows
 
 
 def main():
@@ -110,16 +127,69 @@ def main():
     ap.add_argument("--cache-path", default="./cremad_features")
     ap.add_argument("--images-dir", default="./images_cremad_v6")
     ap.add_argument("--device", default=None)
-    ap.add_argument("--n-clients", type=int, required=True)
-    ap.add_argument("--kind", choices=["jsd", "hd"], required=True)
-    ap.add_argument("--target", type=float, required=True)
+    ap.add_argument("--client-counts", type=int, nargs="+", default=None,
+                     help="Defaults to the full CLIENT_SWEEP from train_cremad.py: 4 6 10 20 100")
+    ap.add_argument("--jsd-levels", type=float, nargs="+", default=None,
+                     help="Defaults to FIXED_JSD_LEVELS: 0.02 0.10 0.24 0.39 0.48")
+    ap.add_argument("--hd-levels", type=float, nargs="+", default=None,
+                     help="Defaults to FIXED_HD_LEVELS: 0.05 0.16 0.37 0.57 0.70")
+    ap.add_argument("--min-samples", type=int, default=10)
+    ap.add_argument("--avail-threshold", type=float, default=0.10)
+    ap.add_argument("--out", default="./partition_diagnostic_summary.csv")
     args = ap.parse_args()
 
     cfg = build_config(args)
+    client_counts = args.client_counts or cfg.CLIENT_SWEEP
+    jsd_levels = args.jsd_levels if args.jsd_levels is not None else [0.02, 0.10, 0.24, 0.39, 0.48]
+    hd_levels = args.hd_levels if args.hd_levels is not None else [0.05, 0.16, 0.37, 0.57, 0.70]
+
     img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te = load_cremad(
         cfg.CREMAD_PATH, cfg.CACHE_PATH, cfg)
 
-    diagnose(args.n_clients, args.kind, args.target, cfg, img_tr, aud_tr, lbl_tr)
+    all_rows = []
+    combos = (
+        [(n, "jsd", j) for n in client_counts for j in jsd_levels]
+        + [(n, "hd", h) for n in client_counts for h in hd_levels]
+    )
+    total = len(combos)
+
+    print(f"\nRunning {total} (n_clients, kind, level) combos "
+          f"x {len(cfg.SEEDS)} seeds each ...\n")
+
+    for i, (n_clients, kind, level) in enumerate(combos, 1):
+        print(f"[{i}/{total}] n_clients={n_clients:<4} {kind.upper()}={level:.2f} ...", end=" ", flush=True)
+        rows = check_partition(n_clients, kind, level, cfg, img_tr, aud_tr, lbl_tr,
+                                args.min_samples, args.avail_threshold)
+        all_rows.extend(rows)
+        mean_frac = float(np.mean([r["flagged_frac"] for r in rows]))
+        print(f"mean flagged = {mean_frac:.0%}")
+
+        # incremental save so a Ctrl-C or crash doesn't lose everything
+        with open(args.out, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(all_rows)
+
+    print(f"\nSaved per-seed detail to: {args.out}\n")
+
+    # ── summary table (mean flagged % per n_clients x kind x level) ────────
+    print(f"{'='*78}\nSUMMARY — mean %% of clients flagged (over {len(cfg.SEEDS)} seeds)\n{'='*78}")
+    print(f"{'n_clients':<10}{'kind':<6}{'target':<8}{'mean_flagged%':<15}{'seed_range'}")
+    seen = set()
+    for n_clients, kind, level in combos:
+        key = (n_clients, kind, round(level, 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        matching = [r for r in all_rows if r["n_clients"] == n_clients and r["kind"] == kind
+                    and abs(r["target"] - level) < 1e-6]
+        fracs = [r["flagged_frac"] for r in matching]
+        print(f"{n_clients:<10}{kind:<6}{level:<8.2f}{np.mean(fracs):<15.0%}"
+              f"[{min(fracs):.0%} - {max(fracs):.0%}]")
+
+    print(f"\nFull per-seed CSV: {args.out}")
+    print("Columns: n_clients, kind, target, seed, alpha_modal, label_jsd, label_hd, "
+          "n_flagged, n_total_clients, flagged_frac, reasons")
 
 
 if __name__ == "__main__":
