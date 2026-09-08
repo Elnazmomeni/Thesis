@@ -117,10 +117,10 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  # 90
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 5
+    cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 15, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 15, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
     cfg.FL_ROUNDS_CLIENTS = 30
 
@@ -625,7 +625,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 ####### alpha sweep ########
 
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_lable5.pkl"):
+                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_lable1000_loc1.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1127,7 +1127,7 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_cremad_v6",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_5.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_1000_loc1.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_cremad_v6.py",
                          help="Where to write the final results summary")
