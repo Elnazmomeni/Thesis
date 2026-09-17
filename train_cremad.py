@@ -117,7 +117,7 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 1000
+    cfg.ALPHA_LABEL_FIXED = 5
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
@@ -625,7 +625,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 ####### alpha sweep ########
 
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_lable1000_loc1.pkl"):
+                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_lable5_loc1.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -764,7 +764,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                 results_jsd.setdefault(f"FL_acc_std_JSD_{j:.2f}", [])
                 results_jsd.setdefault(f"achieved_jsd_mean_{j:.2f}", [])
                 results_jsd.setdefault(f"achieved_jsd_std_{j:.2f}", [])
-        
+
         if results_hd is not None:
             for h in fixed_hd_levels:
                 results_hd.setdefault(f"FL_f1_mean_HD_{h:.2f}", [])
@@ -773,7 +773,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                 results_hd.setdefault(f"FL_acc_std_HD_{h:.2f}", [])
                 results_hd.setdefault(f"achieved_hd_mean_{h:.2f}", [])
                 results_hd.setdefault(f"achieved_hd_std_{h:.2f}", [])
-                
+
         print(f"  [resume] loaded checkpoint, {len(done)} (client,type,level) combos already complete")
     except (FileNotFoundError, EOFError, pickle.UnpicklingError):
         print("  [resume] no usable checkpoint found — starting fresh")
@@ -1147,7 +1147,7 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_cremad_v6",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_1000_loc1.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_5_loc1.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_cremad_v6.py",
                          help="Where to write the final results summary")
