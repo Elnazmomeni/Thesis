@@ -913,8 +913,8 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 C_CL = "#D62728"
 C_FL_F1 = "#1F77B4"
 C_FL_ACC = "#FF7F0E"
-JSD_PAL = ["#1A9850", "#91CF60", "#FEE08B", "#FC8D59"]
-HD_PAL = ["#313695", "#4575B4", "#ABD9E9", "#F46D43"]
+JSD_PAL = ["#1A9850", "#91CF60", "#FEE08B", "#FC8D59", "#D73027", "#762A83"]  # 6 distinct colors
+HD_PAL  = ["#313695", "#4575B4", "#ABD9E9", "#F46D43", "#A50026", "#5E3C99"]  # 6 distinct colors
 
 BASE_RC = {
     "figure.facecolor": "white", "axes.facecolor": "white",
@@ -997,7 +997,7 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
     client_counts = results["client_counts"]
     x_pos = np.arange(len(client_counts))
     x_labels = [str(n) for n in client_counts]
-    markers = ["o", "s", "^", "v"]
+    markers = ["o", "s", "^", "v", "D", "P"]
 
     for ax, metric, cl_val, ylabel, ptitle in [
         (ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"),
@@ -1168,8 +1168,8 @@ def main():
                              "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
 
     # Cell 19 — fixed JSD/HD levels
-    cfg.FIXED_JSD_LEVELS = [0.02, 0.10, 0.24, 0.39, 0.48]
-    cfg.FIXED_HD_LEVELS = [0.05,0.16, 0.37, 0.57, 0.70]
+    cfg.FIXED_JSD_LEVELS = [0.02, 0.05, 0.10, 0.24, 0.39, 0.48]
+    cfg.FIXED_HD_LEVELS  = [0.05, 0.10, 0.16, 0.37, 0.57, 0.70]
     print(f"fixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
