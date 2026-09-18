@@ -1,35 +1,12 @@
-"""
-train_cremad.py — CREMA-D multimodal FL pipeline (v6), converted from
-finalscript.ipynb so it can run unattended on a remote GPU server.
-
-Converted 1:1 from your notebook cells 8-20 (config, feature extraction,
-model architecture, client partitioning, alpha search, FedAvg training,
-sweeps, and plotting). Colab-only bits (drive.mount, !pip installs, the
-CREMA-D download itself) were pulled out — run download_data.py first,
-and see requirements.txt for the pip installs.
-
-Usage
------
-    python train_cremad.py --cremad-path ./CREMA-D --images-dir ./images_cremad_v6
-
-Recommended on a remote server (so it survives you disconnecting):
-    tmux new -s cremad
-    python train_cremad.py --cremad-path ./CREMA-D
-    # Ctrl+b, d to detach; `tmux attach -t cremad` to check back in later
-
-The client sweep (Step 4) checkpoints itself to disk (--checkpoint-path) and
-resumes automatically if you re-run after an interruption.
-"""
-
+# import the main libraries
 import argparse
 import copy
 import gc
 import json
 import os
 import pickle
-
 import matplotlib
-matplotlib.use("Agg")  # headless server: no display available, write PNGs only
+matplotlib.use("Agg")  # no display and just save as png
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -40,14 +17,12 @@ import torch.optim as optim
 from sklearn.metrics import f1_score, accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Cell 1 — numpy seed overflow guard
-# ─────────────────────────────────────────────────────────────────────────
 import numpy as _np
 import numbers
+import sys
 
+
+# controling numpy seed overflow issues
 _NUMPY_SEED_MAX = 2**32 - 1
 
 if not getattr(_np.random, "_seed_guard_installed", False):
@@ -72,20 +47,15 @@ if not getattr(_np.random, "_seed_guard_installed", False):
     print("  [guard] np.random.seed / default_rng patched — overflow-proof")
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Local FedArtML modules (fedartml_local/fl_modality_heterogeneity.py and
-# fedartml_local/fedartml_patch.py). Only these two are actually imported
-# by the pipeline below; the rest of fedartml_local/ is kept for reference.
-# ─────────────────────────────────────────────────────────────────────────
-import sys
+
+# import fl classes
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fedartml_local"))
 from fl_modality_heterogeneity import ModalityHeterogeneity
 from fedartml_patch import SplitAsFederatedData
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 8 — configuration
-# ═════════════════════════════════════════════════════════════════════════
+# configuration
+
 def build_config(args):
     cfg = argparse.Namespace()
     cfg.CREMAD_PATH = args.cremad_path
@@ -111,18 +81,18 @@ def build_config(args):
 
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 30
+    cfg.FL_ROUNDS_CLIENTS = 30
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 5
+    cfg.ALPHA_LABEL_FIXED = 1
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
-    cfg.FL_ROUNDS_CLIENTS = 30
 
     cfg.FIXED_JSD_LEVELS = None
     cfg.FIXED_HD_LEVELS = None
@@ -137,21 +107,20 @@ def build_config(args):
     cfg.FEDARTML_SEED_CAP = 100_000
     return cfg
 
-
+ # make sure  random seed stays in our range
 def _fedartml_safe_seed(random_state: int, cfg) -> int:
     return int(random_state) % cfg.FEDARTML_SEED_CAP
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 9 — feature extraction
-# ═════════════════════════════════════════════════════════════════════════
+# feature extraction
+
 def extract_audio_features(wav_path, cfg):
     import librosa
     y, sr = librosa.load(wav_path, sr=16000, mono=True)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=cfg.N_MFCC)
     return np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)]).astype(np.float32)
 
-
+# extract a face frame from each video
 def extract_image_feature(vid_path, cfg):
     import cv2
     cap = cv2.VideoCapture(vid_path)
@@ -166,6 +135,7 @@ def extract_image_feature(vid_path, cfg):
     return frame.astype(np.float32).ravel() / 255.0
 
 
+# cache the extracted features
 def extract_and_cache_features(cremad_path, cache_path, cfg):
     os.makedirs(cache_path, exist_ok=True)
     img_cache = os.path.join(cache_path, "img.npy")
@@ -237,7 +207,7 @@ def extract_and_cache_features(cremad_path, cache_path, cfg):
     np.save(lbl_cache, lbl_arr)
     return img_arr, aud_arr, lbl_arr
 
-
+# load the extracted features
 def load_cremad(cremad_path, cache_path, cfg, test_ratio=0.2):
     print(f"  Loading CREMA-D from: {cremad_path}")
     img_all, aud_all, lbl_all = extract_and_cache_features(cremad_path, cache_path, cfg)
@@ -264,8 +234,9 @@ def load_cremad(cremad_path, cache_path, cfg, test_ratio=0.2):
     return img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 10 — model architecture
+# model architecture
+
+# image model
 class ImageBranch(nn.Module):
     def __init__(self, cfg, embed_dim=128):
         super().__init__()
@@ -284,7 +255,7 @@ class ImageBranch(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-
+# audio model
 class AudioBranch(nn.Module):
     def __init__(self, input_dim, embed_dim=128):
         super().__init__()
@@ -296,6 +267,8 @@ class AudioBranch(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+    
+# multimodel
 class MultimodalNet(nn.Module):
     def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None):
         super().__init__()
@@ -310,12 +283,13 @@ class MultimodalNet(nn.Module):
     def forward(self, img, aud):
         return self.classifier(torch.cat([self.img_branch(img), self.aud_branch(aud)], dim=1))
 
-
+# create the model
 def make_model(cfg):
     return MultimodalNet(cfg, num_classes=cfg.NUM_CLASSES, embed_dim=128,
                           aud_input_dim=cfg.AUD_DIM).to(cfg.DEVICE)
 
 
+# convert the data to a PyTorch dataset
 def make_tensor_dataset(img, aud, labels):
     return TensorDataset(
         torch.from_numpy(img).float(),
@@ -324,9 +298,7 @@ def make_tensor_dataset(img, aud, labels):
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 11 — client partitioning (FedArtML label split + FedAMM modality split)
-# ═════════════════════════════════════════════════════════════════════════
+# split the training data between clients
 def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cfg, random_state=42):
     fedartml_seed = _fedartml_safe_seed(random_state, cfg)
     federater = SplitAsFederatedData(random_state=fedartml_seed)
@@ -354,7 +326,7 @@ def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cf
     label_hd = distances["without_class_completion"]["hellinger"]
     return partitions, label_jsd, label_hd
 
-
+# build the client datasets
 def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
                            alpha_label=None, num_clients=None, random_state=42):
     if alpha_label is None:
@@ -364,8 +336,8 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
     partitions, label_jsd, label_hd = partition_data_fedartml(
         img_tr, aud_tr, lbl_tr, num_clients=num_clients,
         alpha_label=alpha_label, cfg=cfg, random_state=random_state)
-
-    mh = ModalityHeterogeneity(modality_names=["image", "audio"], random_state=random_state)
+    
+    mh = ModalityHeterogeneity(modality_names=["image", "audio"], random_state=random_state)     # joint modality assignment for all the clients
 
     all_img = np.concatenate([p[0] for p in partitions], axis=0)
     all_aud = np.concatenate([p[1] for p in partitions], axis=0)
@@ -380,7 +352,8 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
     joint_data, _ = mh.assign_modalities_to_clients(
         modality_arrays=modality_arrays, y=all_lbl, num_clients=num_clients,
         alpha=alpha_modal, prefix_cli="client")
-
+    
+    # free the unused variables to reduce memory usage for the ram problem
     del partitions, all_img, all_aud, all_lbl
     gc.collect()
 
@@ -405,26 +378,24 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
             torch.from_numpy(c_entry["audio"]).float(),
             torch.from_numpy(c_entry["y"]).long(),
         ))
-
+    # free the unused variables to reduce memory usage for the ram problem
     del joint_data
     gc.collect()
 
+    # heterogeneity scores on the split data
     scores = mh.compute_modality_heterogeneity_score(client_data_combined)
     modal_jsd = scores["mean_js_divergence"]
     modal_hd = scores["mean_hellinger"]
 
+    # free the unused variables to reduce memory usage for the ram problem
     del client_data_combined
     gc.collect()
 
     return client_datasets, modal_jsd, modal_hd, label_jsd, label_hd, client_order
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 12 — alpha search for target heterogeneity
-# ═════════════════════════════════════════════════════════════════════════
-_ALPHA_CACHE = {}
-
-
+# find alpha values for the target heterogeneity
+_ALPHA_CACHE = {} # store the alpha values found before
 def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_seeds=None):
     if probe_seeds is None:
         probe_seeds = cfg.SEEDS
@@ -432,15 +403,7 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     key = (kind, round(float(target), 4), num_clients)
     if key in _ALPHA_CACHE:
         return _ALPHA_CACHE[key]
-    """
-    Your original setup: np.logspace(-2, 1, 60) covers 3 decades (0.01→0.1→1→10) with 60 points = 20 candidates per decade. That's the resolution that already worked for all your existing levels (0.10–0.48 JSD, 0.16–0.70 HD) — every alpha your search has found so far landed cleanly in this range, so there's no reason to weaken it.
-
-    Keeping 50 instead of 60 for that same 3-decade span costs you a small amount of resolution (50/3 ≈ 16.7/decade vs. 20/decade) — a reasonable trade since your near-IID target doesn't need the full original density, and it caps the total extra search cost.
-    
-    20 points across the new 2-decade extension (10→100→1000) gives you 10 candidates/decade there — sparser than the main zone, which is fine, because you only have one target level (JSD=0.02, HD=0.05) living out there, not four. You don't need fine resolution for one point the way you do for four.
-    
-    Total: 70 candidates, up from 60 — a ~17% increase in search cost per level, and since this search step only computes partitions + heterogeneity scores (no actual FedAvg training), that's a genuinely cheap trade for not degrading your existing calibration while still reaching alpha=1000.
-    """
+    # search 70 alpha candidates, 50 across 0.01–10 for existing levels and 20 for 10 to 1000 to cover near IID targets.
     candidates = np.concatenate([
     np.logspace(-2, 1, 50),
     np.logspace(1, 3, 21)[1:],
@@ -476,32 +439,30 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     _ALPHA_CACHE[key] = best_alpha
     return best_alpha
 
-
+# alpha for JSD
 def find_alpha_for_jsd(target_jsd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("jsd", target_jsd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
-
+# alpha for HD
 def find_alpha_for_hd(target_hd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("hd", target_hd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 13 — training / evaluation / FedAvg
-# ═════════════════════════════════════════════════════════════════════════
+# training and evaluation
+
 criterion = nn.CrossEntropyLoss()
-
-
+# train for one epoch
 def train_one_epoch(model, loader, optimizer, cfg):
     model.train()
     for img, aud, lbl in loader:
-        if img.size(0) < 2:
+        if img.size(0) < 2:  # skip batches that BatchNorm can't handle (error that i had)
             continue
         img, aud, lbl = img.to(cfg.DEVICE), aud.to(cfg.DEVICE), lbl.to(cfg.DEVICE)
         optimizer.zero_grad()
         criterion(model(img, aud), lbl).backward()
         optimizer.step()
 
-
+# evaluate the model
 @torch.no_grad()
 def evaluate(model, loader, cfg):
     model.eval()
@@ -515,6 +476,7 @@ def evaluate(model, loader, cfg):
     return f1, acc
 
 
+# train the centralized base
 def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
     print("\n" + "═" * 60)
     print("STEP 2 — Centralised (CL) training  [compute-equalised]")
@@ -547,14 +509,14 @@ def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
         torch.cuda.empty_cache()
     return cl_f1, cl_acc
 
-
+# get the parameter keys for each model branch
 def _get_branch_keys(state_dict):
     img_keys = [k for k in state_dict if k.startswith("img_branch")]
     aud_keys = [k for k in state_dict if k.startswith("aud_branch")]
     clf_keys = [k for k in state_dict if k.startswith("classifier")]
     return img_keys, aud_keys, clf_keys
 
-
+# train the model with FedAvg
 def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None):
     if fl_rounds is None:
         fl_rounds = cfg.FL_ROUNDS
@@ -576,7 +538,8 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         global_sd = global_model.state_dict()
         img_keys, aud_keys, clf_keys = _get_branch_keys(global_sd)
         all_keys = img_keys + aud_keys + clf_keys
-
+        
+         # running accumulators instead of a growing list
         weighted_sum = {k: torch.zeros_like(v, dtype=torch.float32, device="cpu")
                          for k, v in global_sd.items() if k in all_keys}
         total_weight = 0.0
@@ -622,10 +585,10 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         torch.cuda.empty_cache()
     return result
 
-####### alpha sweep ########
+# alpha sweep 
 
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_5_loc1.pkl"):
+                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_1_loc1.pkl"): # added a checkpoint
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -636,7 +599,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
         make_tensor_dataset(img_te, aud_te, lbl_te),
         batch_size=8, shuffle=False, num_workers=0)
  
-    # ── try to resume ────────────────────────────────────────────────
+    # try to resume 
     results_by_alpha = {}
     done = set()
     try:
@@ -721,15 +684,12 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
         _checkpoint()
         print(f"  [checkpoint] saved after alpha={alpha_modal}")
  
-    # Return in the same order as cfg.ALPHA_MODAL_SWEEP, list-of-dicts,
-    # exactly matching your original function's output format — nothing
-    # downstream (plot_alpha_sweep_figure, save_results) needs to change.
     all_results = [results_by_alpha[round(float(a), 6)] for a in cfg.ALPHA_MODAL_SWEEP]
     return all_results
  
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 15 — client sweep (Step 4, checkpointed) + plotting (first def.)
-# ═════════════════════════════════════════════════════════════════════════
+
+#  client sweep 
+
 def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
                       fixed_jsd_levels, fixed_hd_levels, cfg, checkpoint_path):
     assert fixed_jsd_levels is not None and fixed_hd_levels is not None, \
@@ -754,8 +714,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
         results_jsd = ckpt.get("results_jsd")
         results_hd = ckpt.get("results_hd")
         done = set(ckpt.get("done", set()))
-        # Add missing result keys when resuming from an older checkpoint.
-        # This preserves all previously completed results.
+        # add the missing result keys when resume from an older checkpoint.
         if results_jsd is not None:
             for j in fixed_jsd_levels:
                 results_jsd.setdefault(f"FL_f1_mean_JSD_{j:.2f}", [])
@@ -923,13 +882,8 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
     return results_jsd, results_hd
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Cell 16 — plotting + save_results
-# NOTE: plot_client_sweep_figure is intentionally defined twice, matching
-# your notebook (cell 15 then cell 16) — the version below (from cell 16)
-# is the one that ends up active, same as it was in your notebook, since
-# it's defined later and overwrites the first one at module load time.
-# ═════════════════════════════════════════════════════════════════════════
+# plotting and saving the result so we can use it later
+
 C_CL = "#D62728"
 C_FL_F1 = "#1F77B4"
 C_FL_ACC = "#FF7F0E"
@@ -950,7 +904,7 @@ def _savefig(fig, name, cfg):
     fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
     print(f"  Saved: {path}")
 
-
+# alpha sweep figure
 def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
     alphas = [r["alpha_modal"] for r in sweep_results]
@@ -1007,7 +961,7 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
-
+# client sweep figure
 def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short,
                               fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
@@ -1064,46 +1018,8 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
                  f"mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
     _savefig(fig, filename, cfg)
     plt.close(fig)
-
-
-def plot_seed_table(sweep_results, cl_f1, cl_acc, filename, cfg):
-    plt.rcParams.update(BASE_RC)
-    n = len(sweep_results)
-    fig, ax = plt.subplots(figsize=(14, 0.55 * (n + 2)))
-    ax.axis("off")
-    headers = ["α_modal", "Modal JSD ±std", "Modal HD ±std", "Label JSD ±std",
-               "F1 mean±std", "Acc mean±std", "Gap vs CL F1"]
-    rows = []
-    for r in sweep_results:
-        rows.append([
-            str(r["alpha_modal"]),
-            f"{r['modal_jsd_mean']:.4f} ± {r['modal_jsd_std']:.4f}",
-            f"{r['modal_hd_mean']:.4f} ± {r['modal_hd_std']:.4f}",
-            f"{r['label_jsd_mean']:.4f} ± {r['label_jsd_std']:.4f}",
-            f"{r['f1_mean']:.4f} ± {r['f1_std']:.4f}",
-            f"{r['acc_mean']:.4f} ± {r['acc_std']:.4f}",
-            f"{cl_f1 - r['f1_mean']:+.4f}",
-        ])
-    table = ax.table(cellText=rows, colLabels=headers, loc="center", cellLoc="center")
-    table.auto_set_font_size(False)
-    table.set_fontsize(9.5)
-    table.scale(1, 1.6)
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_facecolor("#1A3A5C")
-            cell.set_text_props(color="white", fontweight="bold")
-        elif row % 2 == 0:
-            cell.set_facecolor("#EEF2F7")
-        else:
-            cell.set_facecolor("white")
-        cell.set_edgecolor("#DDDDDD")
-    ax.set_title(f"Figure E — Multi-seed Alpha Sweep  (v6: FedArtML + FedAMM)\n"
-                 f"seeds: {cfg.SEEDS},  α_label={cfg.ALPHA_LABEL_FIXED} (fixed),  "
-                 f"CL F1={cl_f1:.4f}  Acc={cl_acc:.4f}", fontsize=11, fontweight="bold", pad=12)
-    _savefig(fig, filename, cfg)
-    plt.close(fig)
-
-
+    
+# save the results
 def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path,
                   sweep_results_small=None, sweep_results_full=None, results_2d=None, cfg=None):
     print("\n" + "═" * 60)
@@ -1135,21 +1051,18 @@ def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path,
         f.write("\n".join(lines))
     print(f"  Saved to: {out_path}")
 
-
-# ═════════════════════════════════════════════════════════════════════════
-# Cells 17-20 — main pipeline: load data -> CL baseline -> client sweep -> plots
-# ═════════════════════════════════════════════════════════════════════════
+# main
 def main():
     parser = argparse.ArgumentParser(description="CREMA-D multimodal FL pipeline (v6)")
     parser.add_argument("--cremad-path", default="./CREMA-D",
                          help="Path to the downloaded CREMA-D dataset (run download_data.py first)")
     parser.add_argument("--cache-path", default="./cremad_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_cremad_v6",
+    parser.add_argument("--images-dir", default="./images_cremad_1",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_5_loc1.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_1_loc1.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_cremad_v6.py",
+    parser.add_argument("--results-out", default="./results_output_cremad_1.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1157,6 +1070,7 @@ def main():
     args = parser.parse_args()
 
     cfg = build_config(args)
+
 
     torch.manual_seed(cfg.RANDOM_STATE)
     np.random.seed(cfg.RANDOM_STATE)
@@ -1169,36 +1083,36 @@ def main():
     print(f"  Seeds  : {cfg.SEEDS}")
     print("=" * 60)
 
-    # Cell 17 — load data
+    # load data
     print("\nLoading CREMA-D")
     (img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te) = load_cremad(cfg.CREMAD_PATH, cfg.CACHE_PATH, cfg)
 
-    # Cell 18 — centralised baseline
+    # centralised baseline
     print("\nTraining CREMA-D (centralised baseline)")
     cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
     
-    # Step 3 — alpha sweep (independent of Step 4, real cross-check)
+    # alpha sweep
     print("\\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
         img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg)
- 
+    # alpha sweep plot
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
     plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
                              "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
 
-    # Cell 19 — fixed JSD/HD levels
+    # fixed JSD/HD levels
     cfg.FIXED_JSD_LEVELS = [0.02, 0.05, 0.10, 0.24, 0.39, 0.48]
     cfg.FIXED_HD_LEVELS  = [0.05, 0.10, 0.16, 0.37, 0.57, 0.70]
     print(f"fixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
-    # Cell 20 — client sweep + plots
+    # client sweep
     results_jsd_tail, results_hd_tail = run_client_sweep(
         img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
         fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
         cfg=cfg, checkpoint_path=args.checkpoint_path)
-
+    # client sweep plot
     plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
                               "D1-tail", "figD1_client_sweep_jsd_20_100.png", cl_f1, cl_acc, cfg)
     plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",
