@@ -126,10 +126,10 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  # 90
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 5
+    cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.4, 1.0, 15, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.4, 1.0, 3, 15, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
     cfg.FL_ROUNDS_CLIENTS = 30
 
@@ -140,8 +140,8 @@ def build_config(args):
     # than CREMA-D's did (0.05 vs 0.10 for JSD, 0.10 vs 0.16 for HD), so
     # the new anchor is scaled down accordingly rather than reusing
     # CREMA-D's exact 0.02/0.05 values.
-    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.45]
-    cfg.FIXED_HD_LEVELS = [0.02, 0.10, 0.25, 0.45, 0.70]
+    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.45]
+    cfg.FIXED_HD_LEVELS  = [0.02, 0.10, 0.25, 0.35, 0.45, 0.70]
 
     cfg.MAX_PER_CLASS_ALPHA_SWEEP = 20
 
@@ -663,7 +663,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 # same data replotted)
 # ═════════════════════════════════════════════════════════════════════════
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_5_1loc.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_1loc.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1114,11 +1114,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess",
+    parser.add_argument("--images-dir", default="./images_ravdess_1000",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local1_5.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local1.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_1000.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
