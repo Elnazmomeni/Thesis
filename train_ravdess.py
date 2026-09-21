@@ -792,6 +792,25 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
         results_jsd = ckpt.get("results_jsd")
         results_hd = ckpt.get("results_hd")
         done = set(ckpt.get("done", set()))
+         # add the missing result keys when resume from an older checkpoint.
+        if results_jsd is not None:
+            for j in fixed_jsd_levels:
+                results_jsd.setdefault(f"FL_f1_mean_JSD_{j:.2f}", [])
+                results_jsd.setdefault(f"FL_f1_std_JSD_{j:.2f}", [])
+                results_jsd.setdefault(f"FL_acc_mean_JSD_{j:.2f}", [])
+                results_jsd.setdefault(f"FL_acc_std_JSD_{j:.2f}", [])
+                results_jsd.setdefault(f"achieved_jsd_mean_{j:.2f}", [])
+                results_jsd.setdefault(f"achieved_jsd_std_{j:.2f}", [])
+
+        if results_hd is not None:
+            for h in fixed_hd_levels:
+                results_hd.setdefault(f"FL_f1_mean_HD_{h:.2f}", [])
+                results_hd.setdefault(f"FL_f1_std_HD_{h:.2f}", [])
+                results_hd.setdefault(f"FL_acc_mean_HD_{h:.2f}", [])
+                results_hd.setdefault(f"FL_acc_std_HD_{h:.2f}", [])
+                results_hd.setdefault(f"achieved_hd_mean_{h:.2f}", [])
+                results_hd.setdefault(f"achieved_hd_std_{h:.2f}", [])
+
         print(f"  [resume] loaded checkpoint, {len(done)} (client,type,level) combos already complete")
     except (FileNotFoundError, EOFError, pickle.UnpicklingError):
         print("  [resume] no usable checkpoint found — starting fresh")
