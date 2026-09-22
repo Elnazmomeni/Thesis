@@ -79,8 +79,8 @@ def build_config(args):
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.NUM_CLIENTS = 2
-    cfg.FL_ROUNDS = 100
-    cfg.FL_ROUNDS_CLIENTS = 100
+    cfg.FL_ROUNDS = 200
+    cfg.FL_ROUNDS_CLIENTS = 200
     cfg.FL_LOCAL_EPOCHS = 3
     cfg.FL_LR = 5e-4
 
