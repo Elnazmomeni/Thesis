@@ -1291,5 +1291,5 @@ if __name__ == "__main__":
                               batch_size=cfg.BATCH_SIZE, shuffle=False)
 
     (f1, acc), checkpoints = train_fedavg(client_datasets, test_loader, cfg,
-                                           fl_rounds=200, local_epochs=3, eval_every=50)
+                                           fl_rounds=200, local_epochs=3, eval_every=2)
     print(checkpoints)
