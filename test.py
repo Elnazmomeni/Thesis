@@ -1285,11 +1285,16 @@ if __name__ == "__main__":
         images_dir="./images_ravdess_smoke_test",
         device=None,
     )
-    cfg = build_config(args)  # NUM_CLIENTS=6, ALPHA_LABEL_FIXED=1000, FL_LOCAL_EPOCHS=3
+    cfg = build_config(args)
     img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te = load_ravdess(cfg.RAVDESS_PATH, cfg.CACHE_PATH, cfg)
-    client_datasets, test_loader = build_client_datasets(
+
+    client_datasets, modal_jsd, modal_hd, label_jsd, label_hd, client_order = build_client_datasets(
         img_tr, aud_tr, lbl_tr, alpha_modal=1000, cfg=cfg,
         alpha_label=cfg.ALPHA_LABEL_FIXED, num_clients=cfg.NUM_CLIENTS)
+
+    test_loader = DataLoader(make_tensor_dataset(img_te, aud_te, lbl_te),
+                              batch_size=cfg.BATCH_SIZE, shuffle=False)
+
     (f1, acc), checkpoints = train_fedavg(client_datasets, test_loader, cfg,
                                            fl_rounds=200, local_epochs=3, eval_every=50)
     print(checkpoints)
