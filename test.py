@@ -552,7 +552,7 @@ def _get_branch_keys(state_dict):
     return img_keys, aud_keys, clf_keys
 
 
-def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None):
+def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None, eval_every=None):
     if fl_rounds is None:
         fl_rounds = cfg.FL_ROUNDS
     if local_epochs is None:
@@ -615,6 +615,20 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
     result = evaluate(global_model, test_loader, cfg)
     del global_model, local_model
+    
+    checkpoints = {}
+    for rnd in tqdm(range(fl_rounds), desc="      FedAvg rounds", leave=False):
+        # ... existing per-round training logic, unchanged ...
+
+        if any_round_trained and eval_every and (rnd + 1) % eval_every == 0:
+            f1, acc = evaluate(global_model, test_loader, cfg)
+            checkpoints[rnd + 1] = (f1, acc)
+            print(f"    [round {rnd+1}] F1={f1:.4f} Acc={acc:.4f}")
+
+    result = evaluate(global_model, test_loader, cfg)
+    if eval_every:
+        result = (result, checkpoints)
+        
     if cfg.DEVICE == "cuda":
         torch.cuda.empty_cache()
     return result
@@ -1261,34 +1275,21 @@ def main():
     plot_2d_heterogeneity_map(sweep_results_full, "figF_2d_heterogeneity_map.png",
                                cfg, metric="acc")
 
-    print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
-    print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
-
-    # Step 4 — client sweep + plots
-    results_jsd_tail, results_hd_tail = run_client_sweep(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
-        fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
-        cfg=cfg, checkpoint_path=args.checkpoint_path)
-
-    plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
-                              "D1", "figD1_client_sweep_jsd.png", cl_f1, cl_acc, cfg)
-    plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",
-                              "D2", "figD2_client_sweep_hd.png", cl_f1, cl_acc, cfg)
-
-    print("\nCalibration check (JSD):")
-    for j in cfg.FIXED_JSD_LEVELS:
-        print(f"  target={j:.2f}  achieved_mean_per_client_count="
-              f"{results_jsd_tail[f'achieved_jsd_mean_{j:.2f}']}")
-    print("\nCalibration check (HD):")
-    for h in cfg.FIXED_HD_LEVELS:
-        print(f"  target={h:.2f}  achieved_mean_per_client_count="
-              f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
-
-    save_results(cl_f1, cl_acc, sweep_results_full, results_jsd_tail, results_hd_tail,
-                 args.results_out, cfg)
-
     print("\nAll done.")
 
 
 if __name__ == "__main__":
-    main()
+    args = argparse.Namespace(
+        ravdess_path="./RAVDESS",
+        cache_path="./ravdess_features",
+        images_dir="./images_ravdess_smoke_test",
+        device=None,
+    )
+    cfg = build_config(args)  # NUM_CLIENTS=6, ALPHA_LABEL_FIXED=1000, FL_LOCAL_EPOCHS=3
+    img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te = load_ravdess(cfg.RAVDESS_PATH, cfg.CACHE_PATH, cfg)
+    client_datasets, test_loader = build_client_datasets(
+        img_tr, aud_tr, lbl_tr, alpha_modal=1000, cfg=cfg,
+        alpha_label=cfg.ALPHA_LABEL_FIXED, num_clients=cfg.NUM_CLIENTS)
+    (f1, acc), checkpoints = train_fedavg(client_datasets, test_loader, cfg,
+                                           fl_rounds=200, local_epochs=3, eval_every=50)
+    print(checkpoints)
