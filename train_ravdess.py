@@ -1,37 +1,4 @@
-"""
-train_ravdess.py — RAVDESS multimodal FL pipeline, converted from your
-notebook the same way train_cremad.py was, with the same fixes applied:
-
-  1. BatchNorm -> GroupNorm in both branches (fixes the degenerate-batch /
-     corrupted-running-stats issue we diagnosed on CREMA-D's client=4
-     collapse — same architecture, same risk here).
-  2. Alpha search range widened + split dense/sparse (0.01-10 dense,
-     10-1000 sparse) so near-IID targets are reachable, without losing
-     resolution where your existing targets already live.
-  3. Removed the "if img.size(0) < 2: continue" guard — GroupNorm doesn't
-     need it, so every sample gets used now.
-  4. Same fedartml_local module layout, argparse config, and patch2-style
-     checkpointed client sweep as train_cremad.py.
-  5. Step 3 (alpha sweep) kept STANDALONE (independent training run) per
-     your preference — not derived from Step 4's data — so it remains a
-     genuine cross-check for Figure D.
-
-Differences from train_cremad.py that are RAVDESS-specific, not fixes:
-  - 8 emotion classes instead of 6.
-  - Single video file provides BOTH audio and image features (RAVDESS
-    "Video_Speech" files contain audio+video in one .mp4; CREMA-D has
-    separate audio/video files).
-  - Default FIXED_JSD_LEVELS/FIXED_HD_LEVELS match your notebook's values.
-
-Usage:
-    python train_ravdess.py --ravdess-path ./RAVDESS --images-dir ./images_ravdess
-
-Recommended on a remote server:
-    tmux new -s ravdess
-    python train_ravdess.py --ravdess-path ./RAVDESS
-    # Ctrl+b, d to detach; `tmux attach -t ravdess` to check back in later
-"""
-
+# import the main libraries
 import argparse
 import copy
 import gc
@@ -52,9 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# numpy seed overflow guard (unchanged from CREMA-D)
-# ─────────────────────────────────────────────────────────────────────────
+# controling numpy seed overflow issues
 import numpy as _np
 import numbers
 
@@ -82,19 +47,14 @@ if not getattr(_np.random, "_seed_guard_installed", False):
     print("  [guard] np.random.seed / default_rng patched — overflow-proof")
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Local FedArtML modules — same fedartml_local/ folder as train_cremad.py,
-# reuse it rather than duplicating (these files aren't dataset-specific)
-# ─────────────────────────────────────────────────────────────────────────
+# import fl classes
 import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fedartml_local"))
 from fl_modality_heterogeneity import ModalityHeterogeneity
 from fedartml_patch import SplitAsFederatedData
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Configuration
-# ═════════════════════════════════════════════════════════════════════════
+# configuration
 def build_config(args):
     cfg = argparse.Namespace()
     cfg.RAVDESS_PATH = args.ravdess_path
@@ -118,9 +78,9 @@ def build_config(args):
     else:
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    cfg.NUM_CLIENTS = 6
-    cfg.FL_ROUNDS = 30
-    cfg.FL_ROUNDS_CLIENTS = 30
+    cfg.NUM_CLIENTS = 2
+    cfg.FL_ROUNDS = 100
+    cfg.FL_ROUNDS_CLIENTS = 100
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
@@ -131,16 +91,9 @@ def build_config(args):
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
-    cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
-   
-
-    # Same as your notebook's 4 levels, PLUS a near-IID anchor point at the
-    # low end (same reasoning as CREMA-D's added 0.02/0.05: your alpha
-    # search now reaches up to alpha=1000, so it can actually hit a
-    # near-zero target). RAVDESS's original levels already start lower
-    # than CREMA-D's did (0.05 vs 0.10 for JSD, 0.10 vs 0.16 for HD), so
-    # the new anchor is scaled down accordingly rather than reusing
-    # CREMA-D's exact 0.02/0.05 values.
+    cfg.CLIENT_SWEEP = [2, 6, 10, 20, 100]
+  
+    #fixed JSD snd HD levels
     cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.45]
     cfg.FIXED_HD_LEVELS  = [0.02, 0.10, 0.25, 0.35, 0.45, 0.70]
 
@@ -159,14 +112,13 @@ def build_config(args):
     return cfg
 
 
+ # make sure  random seed stays in our range
 def _fedartml_safe_seed(random_state: int, cfg) -> int:
     return int(random_state) % cfg.FEDARTML_SEED_CAP
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Feature extraction — RAVDESS-specific: audio AND image both come from
-# the SAME .mp4 file (unlike CREMA-D's separate AudioWAV/VideoFlash dirs)
-# ═════════════════════════════════════════════════════════════════════════
+# feature extraction
+
 def extract_audio_features(vid_path, cfg):
     import librosa
     y, sr = librosa.load(vid_path, sr=16000, mono=True)
@@ -174,6 +126,7 @@ def extract_audio_features(vid_path, cfg):
     return np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)]).astype(np.float32)
 
 
+# extract a face frame from each video
 def extract_image_feature(vid_path, cfg):
     import cv2
     cap = cv2.VideoCapture(vid_path)
@@ -188,6 +141,7 @@ def extract_image_feature(vid_path, cfg):
     return frame.astype(np.float32).ravel() / 255.0
 
 
+# cache the extracted features
 def extract_and_cache_features(ravdess_path, cache_path, cfg):
     os.makedirs(cache_path, exist_ok=True)
     img_cache = os.path.join(cache_path, "img.npy")
@@ -254,6 +208,7 @@ def extract_and_cache_features(ravdess_path, cache_path, cfg):
     return img_arr, aud_arr, lbl_arr
 
 
+# load the extracted features
 def load_ravdess(ravdess_path, cache_path, cfg, test_ratio=0.2):
     print(f"  Loading RAVDESS from: {ravdess_path}")
     img_all, aud_all, lbl_all = extract_and_cache_features(ravdess_path, cache_path, cfg)
@@ -280,9 +235,9 @@ def load_ravdess(ravdess_path, cache_path, cfg, test_ratio=0.2):
     return img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Model architecture — FIX 1: BatchNorm -> GroupNorm
-# ═════════════════════════════════════════════════════════════════════════
+# model architecture
+
+# image model
 class ImageBranch(nn.Module):
     def __init__(self, cfg, embed_dim=128, use_batchnorm=False):
         super().__init__()
@@ -309,6 +264,7 @@ class ImageBranch(nn.Module):
  
  
 
+# audio model
 class AudioBranch(nn.Module):
     def __init__(self, input_dim, embed_dim=128, use_batchnorm=False):
         super().__init__()
@@ -327,6 +283,7 @@ class AudioBranch(nn.Module):
     def forward(self, x):
         return self.net(x)
  
+# multimodel
 class MultimodalNet(nn.Module):
     def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None,
                  use_batchnorm=False):
@@ -343,6 +300,7 @@ class MultimodalNet(nn.Module):
         return self.classifier(torch.cat([self.img_branch(img), self.aud_branch(aud)], dim=1))
  
  
+# create the model
 def make_model(cfg, use_batchnorm=False):
     """
     use_batchnorm=True  -> CL baseline (full, stable batch sizes; BatchNorm
@@ -357,6 +315,7 @@ def make_model(cfg, use_batchnorm=False):
                           use_batchnorm=use_batchnorm).to(cfg.DEVICE)
 
 
+# convert the data to a PyTorch dataset
 def make_tensor_dataset(img, aud, labels):
     return TensorDataset(
         torch.from_numpy(img).float(),
@@ -365,9 +324,7 @@ def make_tensor_dataset(img, aud, labels):
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Client partitioning (unchanged logic from CREMA-D — dataset-agnostic)
-# ═════════════════════════════════════════════════════════════════════════
+# split the training data between clients
 def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cfg, random_state=42):
     fedartml_seed = _fedartml_safe_seed(random_state, cfg)
     federater = SplitAsFederatedData(random_state=fedartml_seed)
@@ -396,6 +353,7 @@ def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cf
     return partitions, label_jsd, label_hd
 
 
+# build the client datasets
 def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
                            alpha_label=None, num_clients=None, random_state=42):
     if alpha_label is None:
@@ -422,6 +380,7 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
         modality_arrays=modality_arrays, y=all_lbl, num_clients=num_clients,
         alpha=alpha_modal, prefix_cli="client")
 
+    # free the unused variables to reduce memory usage for the ram problem
     del partitions, all_img, all_aud, all_lbl
     gc.collect()
 
@@ -447,13 +406,16 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
             torch.from_numpy(c_entry["y"]).long(),
         ))
 
+    # free the unused variables to reduce memory usage for the ram problem
     del joint_data
     gc.collect()
 
+    # heterogeneity scores on the split data
     scores = mh.compute_modality_heterogeneity_score(client_data_combined)
     modal_jsd = scores["mean_js_divergence"]
     modal_hd = scores["mean_hellinger"]
 
+    # free the unused variables to reduce memory usage for the ram problem
     del client_data_combined
     gc.collect()
 
@@ -604,7 +566,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     sample_weights = np.array([len(ds) for ds in client_datasets], dtype=np.float64)
     sample_weights /= sample_weights.sum()
 
-    MIN_CLIENT_SAMPLES = 2
+    MIN_CLIENT_SAMPLES = max(2, cfg.BATCH_SIZE // 4)
     any_round_trained = False
 
     for rnd in tqdm(range(fl_rounds), desc="      FedAvg rounds", leave=False):
@@ -664,7 +626,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 # same data replotted)
 # ═════════════════════════════════════════════════════════════════════════
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_1loc_1000_fix.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -776,7 +738,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 
     print("\n" + "═" * 60)
     print("STEP 4 — Client sweep [patch2: incremental client_counts/CL_*]")
-    print(f"  alpha_label FIXED = {cfg.ALPHA_LABEL_FIXED}  (FedArtML)")
+    print(f"  alpha_label FIXED = {cfg.ALPHA_LABEL_FIXED}")
     print(f"  JSD levels = {fixed_jsd_levels}")
     print(f"  HD levels  = {fixed_hd_levels}")
     print("  Training on FULL dataset per client sweep point.")
@@ -967,8 +929,14 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 C_CL = "#D62728"
 C_FL_F1 = "#1F77B4"
 C_FL_ACC = "#FF7F0E"
-JSD_PAL = ["#1A9850", "#91CF60", "#FEE08B", "#FC8D59"]
-HD_PAL = ["#313695", "#4575B4", "#ABD9E9", "#F46D43"]
+# 6 levels need 6 distinct colours — the old 4-colour palettes silently
+# reused colour/marker 0 for level 4 and colour/marker 1 for level 5
+# (pal[idx % len(pal)] wrapping around). ColorBrewer 6-class RdYlGn for JSD
+# (green=low heterogeneity -> red=high), and a blue->purple 6-step ramp for
+# HD that stays out of JSD's green/orange/red range so the two figures
+# never share a hue even when viewed side by side.
+JSD_PAL = ["#1A9850", "#66BD63", "#A6D96A", "#FEE08B", "#FC8D59", "#8C2D82"]
+HD_PAL = ["#08306B", "#08519C", "#2171B5", "#4292C6", "#6A51A3", "#3F007D"]
 
 BASE_RC = {
     "figure.facecolor": "white", "axes.facecolor": "white",
@@ -983,6 +951,27 @@ def _savefig(fig, name, cfg):
     path = os.path.join(cfg.IMAGES_DIR, name)
     fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
     print(f"  Saved: {path}")
+
+
+def _merge_close_ticks(dist_vals, alphas, min_sep_frac=0.025, axis_range=1.0):
+    """Group tick positions that are too close to separate visually (within
+    min_sep_frac of the axis range) and merge their labels ('1000/15/10')
+    rather than let them overlap. Call with dist_vals already sorted ascending.
+    """
+    min_sep = min_sep_frac * axis_range
+    groups = []
+    cur_x, cur_a = [dist_vals[0]], [alphas[0]]
+    for xv, a in zip(dist_vals[1:], alphas[1:]):
+        if xv - cur_x[-1] < min_sep:
+            cur_x.append(xv)
+            cur_a.append(a)
+        else:
+            groups.append((cur_x, cur_a))
+            cur_x, cur_a = [xv], [a]
+    groups.append((cur_x, cur_a))
+    tick_pos = [float(np.mean(g[0])) for g in groups]
+    tick_lab = ["/".join(str(a) for a in g[1]) for g in groups]
+    return tick_pos, tick_lab
 
 
 def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_f1, cl_acc, cfg):
@@ -1004,7 +993,7 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     x = np.array(dist_vals)
 
     fig, ax = plt.subplots(figsize=(9, 4.8))
-    plt.subplots_adjust(top=0.78, bottom=0.13, left=0.09, right=0.72)
+    plt.subplots_adjust(top=0.74, bottom=0.13, left=0.09, right=0.72)
     lw = 2.0
     ax.axhline(cl_f1, color=C_CL, lw=lw, label="CL — F1-Score")
     ax.axhline(cl_acc, color="#2CA02C", lw=lw, label="CL — Accuracy")
@@ -1023,11 +1012,12 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     ax.tick_params(colors="#333", direction="out", length=4)
     ax2 = ax.twiny()
     ax2.set_xlim(0.0, 1.0)
-    ax2.set_xticks(dist_vals)
-    ax2.set_xticklabels([str(a) for a in alphas], fontsize=8.5, color="#444")
+    tick_pos, tick_lab = _merge_close_ticks(dist_vals, alphas)
+    ax2.set_xticks(tick_pos)
+    ax2.set_xticklabels(tick_lab, fontsize=8, color="#444", rotation=45, ha="left")
     ax2.set_xlabel(f"Dirichlet α_modal\n[α_label = {cfg.ALPHA_LABEL_FIXED} fixed]",
-                   fontsize=9, color="#444", labelpad=7)
-    ax2.tick_params(colors="#444", direction="out", length=4)
+                   fontsize=9, color="#444", labelpad=10)
+    ax2.tick_params(colors="#444", direction="out", length=4, pad=3)
     for sp in ax2.spines.values():
         sp.set_color("#AAAAAA")
     ax2.spines["top"].set_visible(True)
@@ -1036,8 +1026,8 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
                         fontsize=9, handlelength=2.0)
     legend.get_frame().set_linewidth(0.8)
     ax.set_title(f"Figure {fig_letter} — F1 & Accuracy vs {dist_label}  [RAVDESS]\n"
-                 f"(FedArtML α={cfg.ALPHA_LABEL_FIXED} + FedAMM, mean ± std {len(cfg.SEEDS)} seeds)",
-                 fontsize=11, fontweight="bold", pad=10)
+                 f"(α_label={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)",
+                 fontsize=11, fontweight="bold", pad=40)
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
@@ -1051,7 +1041,7 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
     client_counts = results["client_counts"]
     x_pos = np.arange(len(client_counts))
     x_labels = [str(n) for n in client_counts]
-    markers = ["o", "s", "^", "v"]
+    markers = ["o", "s", "^", "v", "D", "P"]
 
     for ax, metric, cl_val, ylabel, ptitle in [
         (ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"),
@@ -1094,8 +1084,100 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
                          edgecolor="#CCC", fontsize=9, handlelength=2.0)
     legend.get_frame().set_linewidth(0.8)
     fig.suptitle(f"Figure {fig_letter} — F1 & Accuracy vs Number of Clients  [RAVDESS]\n"
-                 f"(fixed modality {dist_label_short}, FedArtML α_label={cfg.ALPHA_LABEL_FIXED}, "
+                 f"(fixed modality {dist_label_short}, α_label={cfg.ALPHA_LABEL_FIXED}, "
                  f"mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
+    _savefig(fig, filename, cfg)
+    plt.close(fig)
+
+
+def _pick(point, *names):
+    """Return the first present key among `names` (handles e.g. 'acc' vs 'acc_mean')."""
+    for n in names:
+        if n in point and point[n] is not None:
+            return point[n]
+    raise KeyError(f"none of {names} found in point: {list(point.keys())}")
+
+
+def plot_2d_heterogeneity_map(points, filename, cfg, metric="acc",
+                               fig_letter="F", title_suffix=""):
+    """
+    Bubble chart: x = modality-heterogeneity JSD, y = label-heterogeneity JSD,
+    bubble size/area = accuracy (or F1, if metric='f1'). One bubble per
+    (alpha_label, alpha_modal) point. A single run only varies the x-axis
+    (alpha_label is fixed per run) — combine points across several runs
+    (e.g. with a companion build_2d_heterogeneity_map.py, same as the
+    CREMA-D pipeline) to get real spread on both axes.
+    """
+    plt.rcParams.update(BASE_RC)
+
+    xs = [_pick(p, "modal_jsd_mean", "modal_jsd") for p in points]
+    ys = [_pick(p, "label_jsd_mean", "label_jsd") for p in points]
+    metric_keys = ("acc_mean", "acc") if metric == "acc" else ("f1_mean", "f1")
+    vals = [_pick(p, *metric_keys) for p in points]
+    labels = [p.get("alpha_label", "run") for p in points]
+
+    fig, ax = plt.subplots(figsize=(7.5, 6.2))
+    plt.subplots_adjust(left=0.11, right=0.97, top=0.85, bottom=0.12)
+
+    vmin, vmax = min(vals), max(vals)
+    span = max(vmax - vmin, 1e-6)
+    size_min, size_max = 60, 900
+
+    def _size(v):
+        return size_min + (v - vmin) / span * (size_max - size_min)
+
+    unique_labels = sorted(set(labels), key=lambda x: (isinstance(x, str), x))
+    cmap = plt.get_cmap("viridis")
+    colour_of = {
+        lab: cmap(i / max(len(unique_labels) - 1, 1)) for i, lab in enumerate(unique_labels)
+    }
+
+    for lab in unique_labels:
+        xi = [x for x, l in zip(xs, labels) if l == lab]
+        yi = [y for y, l in zip(ys, labels) if l == lab]
+        vi = [v for v, l in zip(vals, labels) if l == lab]
+        ax.scatter(xi, yi, s=[_size(v) for v in vi], color=colour_of[lab],
+                   alpha=0.65, edgecolor="white", linewidth=1.2,
+                   label=f"α_label={lab}", zorder=3)
+
+    x_pad = (max(xs) - min(xs)) * 0.15 + 0.02
+    y_pad = (max(ys) - min(ys)) * 0.15 + 0.02
+    ax.set_xlim(max(0, min(xs) - x_pad), max(xs) + x_pad)
+    ax.set_ylim(max(0, min(ys) - y_pad), max(ys) + y_pad)
+    ax.set_xlabel("Mean Jensen-Shannon Distance — modality heterogeneity", labelpad=8)
+    ax.set_ylabel("Mean Jensen-Shannon Distance — label heterogeneity", labelpad=8)
+    ax.grid(True, color="#EAEAEA", linewidth=0.8, zorder=0)
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+
+    metric_name = "Accuracy" if metric == "acc" else "F1-Score"
+    ax.set_title(f"Figure {fig_letter} — Joint Modality/Label Heterogeneity Map  [RAVDESS]\n"
+                 f"(bubble size = {metric_name}, mean {len(cfg.SEEDS)} seeds){title_suffix}",
+                 fontsize=11, fontweight="bold", pad=12)
+
+    ref_vals = np.linspace(vmin, vmax, 3)
+    size_handles = [
+        ax.scatter([], [], s=_size(v), color="#888888", alpha=0.65,
+                   edgecolor="white", linewidth=1.2, label=f"{metric_name}={v:.2f}")
+        for v in ref_vals
+    ]
+    size_legend = ax.legend(handles=size_handles, loc="upper left",
+                             bbox_to_anchor=(1.02, 1.0), title=metric_name,
+                             frameon=True, framealpha=1.0, edgecolor="#CCC",
+                             fontsize=9, labelspacing=1.6, borderpad=1.2)
+    ax.add_artist(size_legend)
+
+    if len(unique_labels) > 1:
+        colour_handles = [
+            plt.Line2D([0], [0], marker="o", linestyle="", color=colour_of[lab],
+                       markersize=9, label=f"α_label={lab}")
+            for lab in unique_labels
+        ]
+        ax.legend(handles=colour_handles, loc="lower left",
+                  bbox_to_anchor=(1.02, 0.0), title="Label skew (colour)",
+                  frameon=True, framealpha=1.0, edgecolor="#CCC", fontsize=9)
+        ax.add_artist(size_legend)
+
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
@@ -1105,7 +1187,7 @@ def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out
     print("STEP 6 — Saving results")
     print("═" * 60)
     lines = [
-        "# RAVDESS results — FedArtML (label) + FedAMM (modality)",
+        "# RAVDESS results",
         f"# alpha_label FIXED = {cfg.ALPHA_LABEL_FIXED}",
         f"# Seeds: {cfg.SEEDS}",
         "",
@@ -1134,11 +1216,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_1000_fix",
+    parser.add_argument("--images-dir", default="./images_ravdess_3_1000",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local1_1000_fix.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local3_1000.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_1000_fix.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_3_1000.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1167,12 +1249,17 @@ def main():
     # Step 3 — standalone alpha sweep (independent of Step 4)
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_1loc_1000_fix.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
     plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
                              "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
+
+    # 2D heterogeneity map for THIS run alone (one alpha_label band; combine
+    # across runs with build_2d_heterogeneity_map.py for the full 2D spread)
+    plot_2d_heterogeneity_map(sweep_results_full, "figF_2d_heterogeneity_map.png",
+                               cfg, metric="acc")
 
     print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
