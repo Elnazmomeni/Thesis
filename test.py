@@ -626,7 +626,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 # same data replotted)
 # ═════════════════════════════════════════════════════════════════════════
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000_test.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1249,7 +1249,7 @@ def main():
     # Step 3 — standalone alpha sweep (independent of Step 4)
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_ckpt_3loc_1000_test.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
