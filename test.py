@@ -89,8 +89,8 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [1000]
-    cfg.ALPHA_MODAL_SWEEP = [1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.2, 3, 10, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.2, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [2, 6, 10, 20, 100]
   
     #fixed JSD snd HD levels
