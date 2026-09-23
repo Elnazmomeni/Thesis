@@ -78,9 +78,9 @@ def build_config(args):
     else:
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    cfg.NUM_CLIENTS = 2
-    cfg.FL_ROUNDS = 200
-    cfg.FL_ROUNDS_CLIENTS = 200
+    cfg.NUM_CLIENTS = 10
+    cfg.FL_ROUNDS = 100
+    cfg.FL_ROUNDS_CLIENTS = 100
     cfg.FL_LOCAL_EPOCHS = 3
     cfg.FL_LR = 5e-4
 
@@ -91,7 +91,7 @@ def build_config(args):
 
     cfg.ALPHA_SWEEP = [1000]
     cfg.ALPHA_MODAL_SWEEP = [1000]
-    cfg.CLIENT_SWEEP = [2, 10]
+    cfg.CLIENT_SWEEP = [2, 6, 10, 20, 100]
   
     #fixed JSD snd HD levels
     cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.45]
@@ -552,8 +552,7 @@ def _get_branch_keys(state_dict):
     return img_keys, aud_keys, clf_keys
 
 
-def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None,
-                  eval_every=None):
+def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None):
     if fl_rounds is None:
         fl_rounds = cfg.FL_ROUNDS
     if local_epochs is None:
@@ -569,7 +568,6 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
     MIN_CLIENT_SAMPLES = max(2, cfg.BATCH_SIZE // 4)
     any_round_trained = False
-    checkpoints = {}
 
     for rnd in tqdm(range(fl_rounds), desc="      FedAvg rounds", leave=False):
         global_sd = global_model.state_dict()
@@ -611,12 +609,6 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         del weighted_sum
         gc.collect()
 
-        # checkpoint evaluation — same global_model, still inside the round loop
-        if eval_every and (rnd + 1) % eval_every == 0:
-            f1, acc = evaluate(global_model, test_loader, cfg)
-            checkpoints[rnd + 1] = (f1, acc)
-            print(f"    [round {rnd+1}] F1={f1:.4f} Acc={acc:.4f}")
-
     if not any_round_trained:
         print(f"    [WARNING] train_fedavg: no client ever had >= {MIN_CLIENT_SAMPLES} "
               "samples in any round — returning untrained global model performance.")
@@ -625,17 +617,16 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     del global_model, local_model
     if cfg.DEVICE == "cuda":
         torch.cuda.empty_cache()
-
-    if eval_every:
-        return result, checkpoints
     return result
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # Step 3 — standalone alpha sweep (kept independent of Step 4, per your
 # preference, so it stays a real cross-check on Figure D rather than the
 # same data replotted)
 # ═════════════════════════════════════════════════════════════════════════
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_test.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_10.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1225,7 +1216,7 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_3_1000",
+    parser.add_argument("--images-dir", default="./images_ravdess_10",
                          help="Where to save output figures")
     parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_ckpt_local3_1000.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
@@ -1258,7 +1249,7 @@ def main():
     # Step 3 — standalone alpha sweep (independent of Step 4)
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_test.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_10.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
@@ -1270,26 +1261,34 @@ def main():
     plot_2d_heterogeneity_map(sweep_results_full, "figF_2d_heterogeneity_map.png",
                                cfg, metric="acc")
 
+    print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
+    print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
+
+    # Step 4 — client sweep + plots
+    results_jsd_tail, results_hd_tail = run_client_sweep(
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
+        fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
+        cfg=cfg, checkpoint_path=args.checkpoint_path)
+
+    plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
+                              "D1", "figD1_client_sweep_jsd.png", cl_f1, cl_acc, cfg)
+    plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",
+                              "D2", "figD2_client_sweep_hd.png", cl_f1, cl_acc, cfg)
+
+    print("\nCalibration check (JSD):")
+    for j in cfg.FIXED_JSD_LEVELS:
+        print(f"  target={j:.2f}  achieved_mean_per_client_count="
+              f"{results_jsd_tail[f'achieved_jsd_mean_{j:.2f}']}")
+    print("\nCalibration check (HD):")
+    for h in cfg.FIXED_HD_LEVELS:
+        print(f"  target={h:.2f}  achieved_mean_per_client_count="
+              f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
+
+    save_results(cl_f1, cl_acc, sweep_results_full, results_jsd_tail, results_hd_tail,
+                 args.results_out, cfg)
+
     print("\nAll done.")
 
 
 if __name__ == "__main__":
-    args = argparse.Namespace(
-        ravdess_path="./RAVDESS",
-        cache_path="./ravdess_features",
-        images_dir="./images_ravdess_smoke_test",
-        device=None,
-    )
-    cfg = build_config(args)
-    img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te = load_ravdess(cfg.RAVDESS_PATH, cfg.CACHE_PATH, cfg)
-
-    client_datasets, modal_jsd, modal_hd, label_jsd, label_hd, client_order = build_client_datasets(
-        img_tr, aud_tr, lbl_tr, alpha_modal=1000, cfg=cfg,
-        alpha_label=cfg.ALPHA_LABEL_FIXED, num_clients=cfg.NUM_CLIENTS)
-
-    test_loader = DataLoader(make_tensor_dataset(img_te, aud_te, lbl_te),
-                              batch_size=cfg.BATCH_SIZE, shuffle=False)
-
-    (f1, acc), checkpoints = train_fedavg(client_datasets, test_loader, cfg,
-                                           fl_rounds=200, local_epochs=3, eval_every=2)
-    print(checkpoints)
+    main()
