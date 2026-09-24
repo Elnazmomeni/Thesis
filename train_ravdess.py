@@ -3,6 +3,7 @@ import argparse
 import copy
 import gc
 import json
+import math
 import os
 import pickle
 
@@ -560,6 +561,15 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     if lr is None:
         lr = cfg.FL_LR
 
+    # Round-wise LR decay, same cosine shape as the CL scheduler
+    # (CosineAnnealingLR from `lr` down to eta_min over `fl_rounds` rounds),
+    # computed once per round and handed to every client's fresh optimizer
+    # that round. This is the piece that was previously missing: the FL
+    # loop trained at a flat `lr` for the entire run.
+    eta_min = 1e-5
+    def round_lr(rnd):
+        return eta_min + 0.5 * (lr - eta_min) * (1 + math.cos(math.pi * rnd / max(1, fl_rounds - 1)))
+
     global_model = make_model(cfg)
     local_model = make_model(cfg)
 
@@ -578,6 +588,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
                          for k, v in global_sd.items() if k in all_keys}
         total_weight = 0.0
         any_client_trained_this_round = False
+        cur_lr = round_lr(rnd)
 
         for c_i, c_ds in enumerate(client_datasets):
             if len(c_ds) < MIN_CLIENT_SAMPLES:
@@ -587,7 +598,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
                                  num_workers=0, drop_last=False)
             if len(loader) == 0:
                 continue
-            opt = optim.Adam(local_model.parameters(), lr=lr, weight_decay=1e-4)
+            opt = optim.Adam(local_model.parameters(), lr=cur_lr, weight_decay=1e-4)
             for _ in range(local_epochs):
                 train_one_epoch(local_model, loader, opt, cfg)
 
