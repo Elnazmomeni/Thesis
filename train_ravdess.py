@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 
-# controling numpy seed overflow issues
+# controling numpy seed overflow issue
 import numpy as _np
 import numbers
 
@@ -89,8 +89,8 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 5, 10, 15, 100, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 5, 10, 15, 100, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 30]
   
     #fixed JSD snd HD levels
