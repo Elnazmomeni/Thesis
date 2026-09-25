@@ -422,12 +422,8 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
     return client_datasets, modal_jsd, modal_hd, label_jsd, label_hd, client_order
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Alpha search — FIX 2: widened, split dense/sparse range
-# ═════════════════════════════════════════════════════════════════════════
-_ALPHA_CACHE = {}
-
-
+# find alpha values for the target heterogeneity
+_ALPHA_CACHE = {} # store the alpha values found before
 def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_seeds=None):
     if probe_seeds is None:
         probe_seeds = cfg.SEEDS
@@ -436,15 +432,13 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     if key in _ALPHA_CACHE:
         return _ALPHA_CACHE[key]
 
-    # Dense in 0.01-10 (where your real targets live), sparse in 10-1000
-    # (reach for a near-IID target if you add one, without diluting
-    # resolution where it matters). See train_cremad.py discussion for why.
+    # search 70 alpha candidates, 50 across 0.01–10 for existing levels and 20 for 10 to 1000 to cover near IID targets
     candidates = np.concatenate([
         np.logspace(-2, 1, 50),
         np.logspace(1, 3, 21)[1:],
     ])
-    n_candidates = len(candidates)
-    best_alpha, best_diff = candidates[0], 1e9   # <-- must be set before the loop
+    n_candidates = len(candidates)  #70
+    best_alpha, best_diff = candidates[0], 1e9 
 
     print(f"    [{kind.upper()} search] target={target:.4f}  num_clients={num_clients}  "
           f"({n_candidates} candidates, averaged over {len(probe_seeds)} seeds: {probe_seeds})")
@@ -474,22 +468,19 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     _ALPHA_CACHE[key] = best_alpha
     return best_alpha
 
-
+# alpha for JSD
 def find_alpha_for_jsd(target_jsd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("jsd", target_jsd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
-
+# alpha for HD
 def find_alpha_for_hd(target_hd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("hd", target_hd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Training / evaluation / FedAvg — FIX 3: removed batch-size-1 guard
-# (GroupNorm doesn't need it, unlike BatchNorm)
-# ═════════════════════════════════════════════════════════════════════════
+# training and evaluation
 criterion = nn.CrossEntropyLoss()
 
-
+# train for one epoch
 def train_one_epoch(model, loader, optimizer, cfg):
     model.train()
     for img, aud, lbl in loader:
@@ -498,7 +489,7 @@ def train_one_epoch(model, loader, optimizer, cfg):
         criterion(model(img, aud), lbl).backward()
         optimizer.step()
 
-
+# evaluate the model
 @torch.no_grad()
 def evaluate(model, loader, cfg):
     model.eval()
@@ -511,7 +502,7 @@ def evaluate(model, loader, cfg):
     acc = float(accuracy_score(all_labels, all_preds))
     return f1, acc
 
-
+# train the centralized base
 def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
     print("\n" + "═" * 60)
     print("STEP 2 — Centralised (CL) training  [compute-equalised]")
@@ -544,14 +535,14 @@ def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
         torch.cuda.empty_cache()
     return cl_f1, cl_acc
 
-
+# get the parameter keys for each model branch
 def _get_branch_keys(state_dict):
     img_keys = [k for k in state_dict if k.startswith("img_branch")]
     aud_keys = [k for k in state_dict if k.startswith("aud_branch")]
     clf_keys = [k for k in state_dict if k.startswith("classifier")]
     return img_keys, aud_keys, clf_keys
 
-
+# train the model with FedAvg
 def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None):
     if fl_rounds is None:
         fl_rounds = cfg.FL_ROUNDS
@@ -573,7 +564,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         global_sd = global_model.state_dict()
         img_keys, aud_keys, clf_keys = _get_branch_keys(global_sd)
         all_keys = img_keys + aud_keys + clf_keys
-
+        # running accumulators instead of a growing list
         weighted_sum = {k: torch.zeros_like(v, dtype=torch.float32, device="cpu")
                          for k, v in global_sd.items() if k in all_keys}
         total_weight = 0.0
@@ -620,11 +611,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Step 3 — standalone alpha sweep (kept independent of Step 4, per your
-# preference, so it stays a real cross-check on Figure D rather than the
-# same data replotted)
-# ═════════════════════════════════════════════════════════════════════════
+# alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
                           checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl"):
     print("\n" + "═" * 60)
@@ -637,7 +624,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
         make_tensor_dataset(img_te, aud_te, lbl_te),
         batch_size=8, shuffle=False, num_workers=0)
  
-    # ── try to resume ────────────────────────────────────────────────
+    # try to resume with checkpoints
     results_by_alpha = {}
     done = set()
     try:
@@ -722,15 +709,11 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
         _checkpoint()
         print(f"  [checkpoint] saved after alpha={alpha_modal}")
  
-    # Return in the same order as cfg.ALPHA_MODAL_SWEEP, list-of-dicts,
-    # exactly matching your original function's output format — nothing
-    # downstream (plot_alpha_sweep_figure, save_results) needs to change.
     all_results = [results_by_alpha[round(float(a), 6)] for a in cfg.ALPHA_MODAL_SWEEP]
     return all_results
  
-# ═════════════════════════════════════════════════════════════════════════
-# Step 4 — client sweep (checkpointed, patch2-style resume)
-# ═════════════════════════════════════════════════════════════════════════
+#clients sweep
+
 def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
                       fixed_jsd_levels, fixed_hd_levels, cfg, checkpoint_path):
     assert fixed_jsd_levels is not None and fixed_hd_levels is not None, \
@@ -755,7 +738,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
         results_jsd = ckpt.get("results_jsd")
         results_hd = ckpt.get("results_hd")
         done = set(ckpt.get("done", set()))
-         # add the missing result keys when resume from an older checkpoint.
+         # add the missing result keys when resume from an older checkpoint
         if results_jsd is not None:
             for j in fixed_jsd_levels:
                 results_jsd.setdefault(f"FL_f1_mean_JSD_{j:.2f}", [])
@@ -923,18 +906,12 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
     return results_jsd, results_hd
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# Plotting
-# ═════════════════════════════════════════════════════════════════════════
+#plots
+
 C_CL = "#D62728"
 C_FL_F1 = "#1F77B4"
 C_FL_ACC = "#FF7F0E"
-# 6 levels need 6 distinct colours — the old 4-colour palettes silently
-# reused colour/marker 0 for level 4 and colour/marker 1 for level 5
-# (pal[idx % len(pal)] wrapping around). ColorBrewer 6-class RdYlGn for JSD
-# (green=low heterogeneity -> red=high), and a blue->purple 6-step ramp for
-# HD that stays out of JSD's green/orange/red range so the two figures
-# never share a hue even when viewed side by side.
+# i have to cheeck the colors and also howmany they are before submit (since i keep adding to the jsd/hd)
 JSD_PAL = ["#1A9850", "#66BD63", "#A6D96A", "#FEE08B", "#FC8D59", "#8C2D82"]
 HD_PAL = ["#08306B", "#08519C", "#2171B5", "#4292C6", "#6A51A3", "#3F007D"]
 
@@ -954,10 +931,7 @@ def _savefig(fig, name, cfg):
 
 
 def _merge_close_ticks(dist_vals, alphas, min_sep_frac=0.025, axis_range=1.0):
-    """Group tick positions that are too close to separate visually (within
-    min_sep_frac of the axis range) and merge their labels ('1000/15/10')
-    rather than let them overlap. Call with dist_vals already sorted ascending.
-    """
+
     min_sep = min_sep_frac * axis_range
     groups = []
     cur_x, cur_a = [dist_vals[0]], [alphas[0]]
@@ -1098,90 +1072,6 @@ def _pick(point, *names):
     raise KeyError(f"none of {names} found in point: {list(point.keys())}")
 
 
-def plot_2d_heterogeneity_map(points, filename, cfg, metric="acc",
-                               fig_letter="F", title_suffix=""):
-    """
-    Bubble chart: x = modality-heterogeneity JSD, y = label-heterogeneity JSD,
-    bubble size/area = accuracy (or F1, if metric='f1'). One bubble per
-    (alpha_label, alpha_modal) point. A single run only varies the x-axis
-    (alpha_label is fixed per run) — combine points across several runs
-    (e.g. with a companion build_2d_heterogeneity_map.py, same as the
-    CREMA-D pipeline) to get real spread on both axes.
-    """
-    plt.rcParams.update(BASE_RC)
-
-    xs = [_pick(p, "modal_jsd_mean", "modal_jsd") for p in points]
-    ys = [_pick(p, "label_jsd_mean", "label_jsd") for p in points]
-    metric_keys = ("acc_mean", "acc") if metric == "acc" else ("f1_mean", "f1")
-    vals = [_pick(p, *metric_keys) for p in points]
-    labels = [p.get("alpha_label", "run") for p in points]
-
-    fig, ax = plt.subplots(figsize=(7.5, 6.2))
-    plt.subplots_adjust(left=0.11, right=0.97, top=0.85, bottom=0.12)
-
-    vmin, vmax = min(vals), max(vals)
-    span = max(vmax - vmin, 1e-6)
-    size_min, size_max = 60, 900
-
-    def _size(v):
-        return size_min + (v - vmin) / span * (size_max - size_min)
-
-    unique_labels = sorted(set(labels), key=lambda x: (isinstance(x, str), x))
-    cmap = plt.get_cmap("viridis")
-    colour_of = {
-        lab: cmap(i / max(len(unique_labels) - 1, 1)) for i, lab in enumerate(unique_labels)
-    }
-
-    for lab in unique_labels:
-        xi = [x for x, l in zip(xs, labels) if l == lab]
-        yi = [y for y, l in zip(ys, labels) if l == lab]
-        vi = [v for v, l in zip(vals, labels) if l == lab]
-        ax.scatter(xi, yi, s=[_size(v) for v in vi], color=colour_of[lab],
-                   alpha=0.65, edgecolor="white", linewidth=1.2,
-                   label=f"α_label={lab}", zorder=3)
-
-    x_pad = (max(xs) - min(xs)) * 0.15 + 0.02
-    y_pad = (max(ys) - min(ys)) * 0.15 + 0.02
-    ax.set_xlim(max(0, min(xs) - x_pad), max(xs) + x_pad)
-    ax.set_ylim(max(0, min(ys) - y_pad), max(ys) + y_pad)
-    ax.set_xlabel("Mean Jensen-Shannon Distance — modality heterogeneity", labelpad=8)
-    ax.set_ylabel("Mean Jensen-Shannon Distance — label heterogeneity", labelpad=8)
-    ax.grid(True, color="#EAEAEA", linewidth=0.8, zorder=0)
-    for sp in ["top", "right"]:
-        ax.spines[sp].set_visible(False)
-
-    metric_name = "Accuracy" if metric == "acc" else "F1-Score"
-    ax.set_title(f"Figure {fig_letter} — Joint Modality/Label Heterogeneity Map  [RAVDESS]\n"
-                 f"(bubble size = {metric_name}, mean {len(cfg.SEEDS)} seeds){title_suffix}",
-                 fontsize=11, fontweight="bold", pad=12)
-
-    ref_vals = np.linspace(vmin, vmax, 3)
-    size_handles = [
-        ax.scatter([], [], s=_size(v), color="#888888", alpha=0.65,
-                   edgecolor="white", linewidth=1.2, label=f"{metric_name}={v:.2f}")
-        for v in ref_vals
-    ]
-    size_legend = ax.legend(handles=size_handles, loc="upper left",
-                             bbox_to_anchor=(1.02, 1.0), title=metric_name,
-                             frameon=True, framealpha=1.0, edgecolor="#CCC",
-                             fontsize=9, labelspacing=1.6, borderpad=1.2)
-    ax.add_artist(size_legend)
-
-    if len(unique_labels) > 1:
-        colour_handles = [
-            plt.Line2D([0], [0], marker="o", linestyle="", color=colour_of[lab],
-                       markersize=9, label=f"α_label={lab}")
-            for lab in unique_labels
-        ]
-        ax.legend(handles=colour_handles, loc="lower left",
-                  bbox_to_anchor=(1.02, 0.0), title="Label skew (colour)",
-                  frameon=True, framealpha=1.0, edgecolor="#CCC", fontsize=9)
-        ax.add_artist(size_legend)
-
-    _savefig(fig, filename, cfg)
-    plt.close(fig)
-
-
 def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out_path, cfg):
     print("\n" + "═" * 60)
     print("STEP 6 — Saving results")
@@ -1207,9 +1097,7 @@ def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out
     print(f"  Saved to: {out_path}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
 # main
-# ═════════════════════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(description="RAVDESS multimodal FL pipeline")
     parser.add_argument("--ravdess-path", default="./RAVDESS",
@@ -1246,7 +1134,7 @@ def main():
     print("\nTraining RAVDESS (centralised baseline)")
     cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
 
-    # Step 3 — standalone alpha sweep (independent of Step 4)
+    # alpha sweep
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
         img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl")
@@ -1256,20 +1144,15 @@ def main():
     plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
                              "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
 
-    # 2D heterogeneity map for THIS run alone (one alpha_label band; combine
-    # across runs with build_2d_heterogeneity_map.py for the full 2D spread)
-    plot_2d_heterogeneity_map(sweep_results_full, "figF_2d_heterogeneity_map.png",
-                               cfg, metric="acc")
-
     print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
-    # Step 4 — client sweep + plots
+    # client sweep
     results_jsd_tail, results_hd_tail = run_client_sweep(
         img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
         fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
         cfg=cfg, checkpoint_path=args.checkpoint_path)
-
+    #plots
     plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
                               "D1", "figD1_client_sweep_jsd.png", cl_f1, cl_acc, cfg)
     plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",

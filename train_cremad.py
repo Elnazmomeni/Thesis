@@ -539,7 +539,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         img_keys, aud_keys, clf_keys = _get_branch_keys(global_sd)
         all_keys = img_keys + aud_keys + clf_keys
         
-         # running accumulators instead of a growing list
+        # running accumulators instead of a growing list
         weighted_sum = {k: torch.zeros_like(v, dtype=torch.float32, device="cpu")
                          for k, v in global_sd.items() if k in all_keys}
         total_weight = 0.0
