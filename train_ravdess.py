@@ -62,7 +62,7 @@ def build_config(args):
     cfg.IMAGES_DIR = args.images_dir
 
     cfg.RANDOM_STATE = 42
-    cfg.SEEDS = [1, 42, 123, 512, 999]
+    cfg.SEEDS = [7, 21, 99, 2024, 3407]
     cfg.NUM_CLASSES = 8
     cfg.BATCH_SIZE = 64
 
@@ -81,7 +81,7 @@ def build_config(args):
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 100
     cfg.FL_ROUNDS_CLIENTS = 100
-    cfg.FL_LOCAL_EPOCHS = 3
+    cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
@@ -89,8 +89,8 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2, 3, 8, 10, 15, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0,2, 3, 8, 10, 15, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 30]
   
     #fixed JSD snd HD levels
@@ -626,7 +626,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 # same data replotted)
 # ═════════════════════════════════════════════════════════════════════════
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_allseeds.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1218,9 +1218,9 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_ravdess_100",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_100.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_new.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_100.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_newseeds.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1249,7 +1249,7 @@ def main():
     # Step 3 — standalone alpha sweep (independent of Step 4)
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_allseeds.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
