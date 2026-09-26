@@ -80,8 +80,8 @@ def build_config(args):
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.NUM_CLIENTS = 10
-    cfg.FL_ROUNDS = 30
-    cfg.FL_ROUNDS_CLIENTS = 30
+    cfg.FL_ROUNDS = 100
+    cfg.FL_ROUNDS_CLIENTS = 100
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
@@ -92,7 +92,7 @@ def build_config(args):
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
-    cfg.CLIENT_SWEEP = [4, 6, 10, 20, 100]
+    cfg.CLIENT_SWEEP = [4, 6, 10, 20, 70]
 
     cfg.FIXED_JSD_LEVELS = None
     cfg.FIXED_HD_LEVELS = None
@@ -588,7 +588,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 # alpha sweep 
 
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/cremad_alpha_sweep_ckpt_1_loc1.pkl"): # added a checkpoint
+                          checkpoint_path="./checkpoints/cremad_alpha_sweep_100fl.pkl"): # added a checkpoint
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1053,16 +1053,16 @@ def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path,
 
 # main
 def main():
-    parser = argparse.ArgumentParser(description="CREMA-D multimodal FL pipeline (v6)")
+    parser = argparse.ArgumentParser(description="CREMA-D multimodal FL pipeline")
     parser.add_argument("--cremad-path", default="./CREMA-D",
                          help="Path to the downloaded CREMA-D dataset (run download_data.py first)")
     parser.add_argument("--cache-path", default="./cremad_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_cremad_1",
+    parser.add_argument("--images-dir", default="./images_cremad_100fl",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_ckpt_1_loc1.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/client_sweep_100fl.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_cremad_1.py",
+    parser.add_argument("--results-out", default="./results_output_cremad_100fl.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1076,7 +1076,7 @@ def main():
     np.random.seed(cfg.RANDOM_STATE)
 
     print("=" * 60)
-    print("CREMA-D — Multimodal FL Pipeline v6 (fresh start)")
+    print("CREMA-D — Multimodal FL Pipeline(fresh start)")
     print(f"  Device : {cfg.DEVICE}")
     if cfg.DEVICE == "cuda":
         print(f"  GPU    : {torch.cuda.get_device_name(0)}")
