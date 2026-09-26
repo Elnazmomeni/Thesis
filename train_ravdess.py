@@ -62,7 +62,7 @@ def build_config(args):
     cfg.IMAGES_DIR = args.images_dir
 
     cfg.RANDOM_STATE = 42
-    cfg.SEEDS = [7, 21, 99, 2024, 3407]
+    cfg.SEEDS = [13, 37, 256, 1337, 8675309]
     cfg.NUM_CLASSES = 8
     cfg.BATCH_SIZE = 64
 
@@ -79,7 +79,7 @@ def build_config(args):
         cfg.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.NUM_CLIENTS = 10
-    cfg.FL_ROUNDS = 50
+    cfg.FL_ROUNDS = 100
     cfg.FL_ROUNDS_CLIENTS = 50
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
@@ -613,7 +613,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
 # alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_50.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_random.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1104,11 +1104,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_50",
+    parser.add_argument("--images-dir", default="./images_ravdess_random",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_50.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_random.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_50.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_random.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1137,7 +1137,7 @@ def main():
     # alpha sweep
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_50.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_random.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
