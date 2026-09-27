@@ -82,7 +82,7 @@ def build_config(args):
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 100
     cfg.FL_ROUNDS_CLIENTS = 100
-    cfg.FL_LOCAL_EPOCHS = 1
+    cfg.FL_LOCAL_EPOCHS = 1000
     cfg.FL_LR = 5e-4
 
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  
