@@ -82,13 +82,13 @@ def build_config(args):
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 100
     cfg.FL_ROUNDS_CLIENTS = 100
-    cfg.FL_LOCAL_EPOCHS = 1000
+    cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS  
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 1
+    cfg.ALPHA_LABEL_FIXED = 1000
 
     cfg.ALPHA_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.08, 0.2, 0.4, 1.0, 3, 10, 15, 1000]
