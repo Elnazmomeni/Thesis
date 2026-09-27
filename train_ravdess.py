@@ -80,7 +80,7 @@ def build_config(args):
 
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 100
-    cfg.FL_ROUNDS_CLIENTS = 50
+    cfg.FL_ROUNDS_CLIENTS = 100
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
 
@@ -1106,9 +1106,9 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_ravdess_random",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_random.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_random_100fl.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_random.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_random_100fl.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
