@@ -83,7 +83,7 @@ def build_config(args):
     cfg.FL_ROUNDS_CLIENTS = 100
     cfg.FL_LOCAL_EPOCHS = 1
     cfg.FL_LR = 5e-4
-    cfg.FL_BATCH_SIZE = 64
+    cfg.FL_BATCH_SIZE = 32
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 

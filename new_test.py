@@ -26,5 +26,5 @@ for k in [4, 10]:
                                         local_epochs=1, lr=cfg.FL_LR, eval_every=10)
         out[(k, seed)] = {"final_f1": f1, "curve": curve}
         print(f"k={k} seed={seed} final F1={f1:.3f}")
-        with open("diag.pkl", "wb") as f:
+        with open("diag_32.pkl", "wb") as f:
             pickle.dump(out, f)
