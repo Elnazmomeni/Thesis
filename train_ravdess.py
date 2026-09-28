@@ -543,7 +543,8 @@ def _get_branch_keys(state_dict):
     return img_keys, aud_keys, clf_keys
 
 # train the model with FedAvg
-def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None):
+def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None,
+                  eval_every=None):
     if fl_rounds is None:
         fl_rounds = cfg.FL_ROUNDS
     if local_epochs is None:
@@ -559,12 +560,13 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
     MIN_CLIENT_SAMPLES = max(2, cfg.BATCH_SIZE // 4)
     any_round_trained = False
+    checkpoints = {}
 
     for rnd in tqdm(range(fl_rounds), desc="      FedAvg rounds", leave=False):
         global_sd = global_model.state_dict()
         img_keys, aud_keys, clf_keys = _get_branch_keys(global_sd)
         all_keys = img_keys + aud_keys + clf_keys
-        # running accumulators instead of a growing list
+
         weighted_sum = {k: torch.zeros_like(v, dtype=torch.float32, device="cpu")
                          for k, v in global_sd.items() if k in all_keys}
         total_weight = 0.0
@@ -600,6 +602,11 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         del weighted_sum
         gc.collect()
 
+        if eval_every and (rnd + 1) % eval_every == 0:
+            f1, acc = evaluate(global_model, test_loader, cfg)
+            checkpoints[rnd + 1] = (f1, acc)
+            print(f"    [round {rnd+1}] F1={f1:.4f} Acc={acc:.4f}")
+
     if not any_round_trained:
         print(f"    [WARNING] train_fedavg: no client ever had >= {MIN_CLIENT_SAMPLES} "
               "samples in any round — returning untrained global model performance.")
@@ -608,8 +615,10 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     del global_model, local_model
     if cfg.DEVICE == "cuda":
         torch.cuda.empty_cache()
-    return result
 
+    if eval_every:
+        return result, checkpoints
+    return result
 
 # alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
