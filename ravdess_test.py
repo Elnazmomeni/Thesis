@@ -91,7 +91,7 @@ def build_config(args):
 
     cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30]
+    cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30, 50]
   
     #fixed JSD snd HD levels
     cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.41]
@@ -1297,34 +1297,34 @@ def plot_client_sweep_figure(
     original_client_counts = np.asarray(
         results["client_counts"]
     )
-    
+
     # Remove K=4 from the FIGURE ONLY.
     # The K=4 results remain untouched in the checkpoint.
     exclude_clients = {4}
-    
+
     # Find indices of client counts that we want to keep
     keep_idx = np.array([
         i for i, n in enumerate(original_client_counts)
         if n not in exclude_clients
     ])
-    
+
     # Sort the remaining clients numerically
     sort_idx = keep_idx[
         np.argsort(original_client_counts[keep_idx])
     ]
-    
+
     # Final client counts shown in the figure
     client_counts = original_client_counts[sort_idx]
-    
+
     # Equally spaced positions on the x-axis
     x_pos = np.arange(len(client_counts))
-    
+
     # Labels shown on x-axis
     x_labels = [
         str(int(n))
         for n in client_counts
     ]
-    
+
 
     markers = [
         "o",
