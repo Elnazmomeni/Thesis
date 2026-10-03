@@ -965,730 +965,163 @@ def _savefig(fig, name, cfg):
 
     print(f"  Saved: {path}")
 
-def _merge_close_ticks(
-    dist_vals,
-    alphas,
-    min_sep_frac=0.025,
-    axis_range=1.0,
-):
+def _merge_close_ticks(dist_vals, alphas, min_sep_frac=0.025, axis_range=1.0):
     min_sep = min_sep_frac * axis_range
-
     groups = []
-
     cur_x = [dist_vals[0]]
     cur_a = [alphas[0]]
-
     for xv, a in zip(dist_vals[1:], alphas[1:]):
-
         if xv - cur_x[-1] < min_sep:
             cur_x.append(xv)
             cur_a.append(a)
-
         else:
             groups.append((cur_x, cur_a))
-
             cur_x = [xv]
             cur_a = [a]
-
     groups.append((cur_x, cur_a))
-
-    tick_pos = [
-        float(np.mean(g[0]))
-        for g in groups
-    ]
-
-    tick_lab = [
-        "/".join(str(a) for a in g[1])
-        for g in groups
-    ]
-
+    tick_pos = [float(np.mean(g[0])) for g in groups]
+    tick_lab = ["/".join(str(a) for a in sorted(g[1], reverse=True)) for g in groups]
     return tick_pos, tick_lab
 
-def plot_alpha_sweep_figure(
-    sweep_results,
-    dist_key,
-    dist_label,
-    fig_letter,
-    filename,
-    cl_f1,
-    cl_acc,
-    cfg,
-):
-
+def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
-
-    alphas = [
-        r["alpha_modal"]
-        for r in sweep_results
-    ]
-
-    dist_vals = [
-        r[dist_key]
-        for r in sweep_results
-    ]
-
-    f1_means = [
-        r["f1_mean"]
-        for r in sweep_results
-    ]
-
-    f1_stds = [
-        r["f1_std"]
-        for r in sweep_results
-    ]
-
-    acc_means = [
-        r["acc_mean"]
-        for r in sweep_results
-    ]
-
-    acc_stds = [
-        r["acc_std"]
-        for r in sweep_results
-    ]
-
-
+    alphas = [r["alpha_modal"] for r in sweep_results]
+    dist_vals = [r[dist_key] for r in sweep_results]
+    f1_means = [r["f1_mean"] for r in sweep_results]
+    f1_stds = [r["f1_std"] for r in sweep_results]
+    acc_means = [r["acc_mean"] for r in sweep_results]
+    acc_stds = [r["acc_std"] for r in sweep_results]
     order = np.argsort(dist_vals)
-
-    alphas = [
-        alphas[i]
-        for i in order
-    ]
-
-    dist_vals = [
-        dist_vals[i]
-        for i in order
-    ]
-
-    f1_means = np.array([
-        f1_means[i]
-        for i in order
-    ])
-
-    f1_stds = np.array([
-        f1_stds[i]
-        for i in order
-    ])
-
-    acc_means = np.array([
-        acc_means[i]
-        for i in order
-    ])
-
-    acc_stds = np.array([
-        acc_stds[i]
-        for i in order
-    ])
-
+    alphas = [alphas[i] for i in order]
+    dist_vals = [dist_vals[i] for i in order]
+    f1_means = np.array([f1_means[i] for i in order])
+    f1_stds = np.array([f1_stds[i] for i in order])
+    acc_means = np.array([acc_means[i] for i in order])
+    acc_stds = np.array([acc_stds[i] for i in order])
     x = np.array(dist_vals)
-
-
-    fig, ax = plt.subplots(
-        figsize=(9, 4.8)
-    )
-
-    plt.subplots_adjust(
-        top=0.74,
-        bottom=0.13,
-        left=0.09,
-        right=0.72,
-    )
-
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    plt.subplots_adjust(top=0.74, bottom=0.13, left=0.09, right=0.72)
     lw = 2.0
-
-
-    ax.axhline(
-        cl_f1,
-        color=C_CL,
-        lw=lw,
-        label="CL — F1-Score",
-    )
-
-    ax.axhline(
-        cl_acc,
-        color="#2CA02C",
-        lw=lw,
-        label="CL — Accuracy",
-    )
-
-
-    ax.plot(
-        x,
-        f1_means,
-        color=C_FL_F1,
-        lw=lw,
-        linestyle="--",
-        marker="^",
-        markersize=7,
-        label="FL (FedAvg) — F1-Score",
-    )
-
-    ax.fill_between(
-        x,
-        f1_means - f1_stds,
-        f1_means + f1_stds,
-        color=C_FL_F1,
-        alpha=0.15,
-    )
-
-
-    ax.plot(
-        x,
-        acc_means,
-        color=C_FL_ACC,
-        lw=lw,
-        linestyle="--",
-        marker="D",
-        markersize=6,
-        label="FL (FedAvg) — Accuracy",
-    )
-
-    ax.fill_between(
-        x,
-        acc_means - acc_stds,
-        acc_means + acc_stds,
-        color=C_FL_ACC,
-        alpha=0.15,
-    )
-
-    ax.set_xlim(
-        0.0,
-        1.0,
-    )
-
-    ax.set_ylim(
-        0.0,
-        1.05,
-    )
-
-    ax.xaxis.set_major_locator(
-        ticker.MultipleLocator(0.1)
-    )
-
-    ax.yaxis.set_major_formatter(
-        ticker.FormatStrFormatter("%.2f")
-    )
-
-    ax.set_xlabel(
-        f"Mean {dist_label}  (modality heterogeneity)",
-        labelpad=6,
-    )
-
-    ax.set_ylabel(
-        "Score",
-        labelpad=6,
-    )
-
-    ax.tick_params(
-        colors="#333",
-        direction="out",
-        length=4,
-    )
-
-
+    ax.axhline(cl_f1, color=C_CL, lw=lw, label="CL — F1-Score")
+    ax.axhline(cl_acc, color="#2CA02C", lw=lw, label="CL — Accuracy")
+    ax.plot(x, f1_means, color=C_FL_F1, lw=lw, linestyle="--", marker="^", markersize=7, label="FL (FedAvg) — F1-Score")
+    ax.fill_between(x, f1_means - f1_stds, f1_means + f1_stds, color=C_FL_F1, alpha=0.15)
+    ax.plot(x, acc_means, color=C_FL_ACC, lw=lw, linestyle="--", marker="D", markersize=6, label="FL (FedAvg) — Accuracy")
+    ax.fill_between(x, acc_means - acc_stds, acc_means + acc_stds, color=C_FL_ACC, alpha=0.15)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.05)
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(0.1))
+    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
+    ax.set_xlabel(f"Mean {dist_label}  (modality heterogeneity)", labelpad=6)
+    ax.set_ylabel("Score", labelpad=6)
+    ax.tick_params(colors="#333", direction="out", length=4)
     ax2 = ax.twiny()
-
-    ax2.set_xlim(
-        0.0,
-        1.0,
-    )
-
-    tick_pos, tick_lab = _merge_close_ticks(
-        dist_vals,
-        alphas,
-    )
-
-    ax2.set_xticks(
-        tick_pos
-    )
-
-    ax2.set_xticklabels(
-        tick_lab,
-        fontsize=8,
-        color="#444",
-        rotation=45,
-        ha="left",
-    )
-
-    ax2.set_xlabel(
-        f"Dirichlet α_modal\n"
-        f"[α_label = {cfg.ALPHA_LABEL_FIXED} fixed]",
-        fontsize=9,
-        color="#444",
-        labelpad=10,
-    )
-
-    ax2.tick_params(
-        colors="#444",
-        direction="out",
-        length=4,
-        pad=3,
-    )
-
+    ax2.set_xlim(0.0, 1.0)
+    tick_pos, tick_lab = _merge_close_ticks(dist_vals, alphas)
+    ax2.set_xticks(tick_pos)
+    ax2.set_xticklabels(tick_lab, fontsize=8, color="#444", rotation=45, ha="left")
+    ax2.set_xlabel(f"Dirichlet β\n[Dirichlet α = {cfg.ALPHA_LABEL_FIXED} fixed]", fontsize=9, color="#444", labelpad=10)
+    ax2.tick_params(colors="#444", direction="out", length=4, pad=3)
     for sp in ax2.spines.values():
         sp.set_color("#AAAAAA")
-
     ax2.spines["top"].set_visible(True)
-
-
-    legend = ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.03, 1.0),
-        borderaxespad=0,
-        frameon=True,
-        framealpha=1.0,
-        fancybox=False,
-        edgecolor="#CCC",
-        fontsize=9,
-        handlelength=2.0,
-    )
-
+    legend = ax.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.0)
     legend.get_frame().set_linewidth(0.8)
-
-
-
-    ax.set_title(
-        f"Figure {fig_letter} — "
-        f"F1 & Accuracy vs {dist_label}  [RAVDESS]\n"
-        f"(α_label={cfg.ALPHA_LABEL_FIXED}, "
-        f"mean ± std {len(cfg.SEEDS)} seeds)",
-        fontsize=11,
-        fontweight="bold",
-        pad=40,
-    )
-
-    _savefig(
-        fig,
-        filename,
-        cfg,
-    )
-
+    ax.set_title(f"Figure {fig_letter} — F1 & Accuracy vs {dist_label}  [RAVDESS]\n(Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=11, fontweight="bold", pad=40)
+    _savefig(fig, filename, cfg)
     plt.close(fig)
 
 
-def plot_client_sweep_figure(
-    results,
-    level_key_prefix,
-    levels,
-    pal,
-    dist_label_short,
-    fig_letter,
-    filename,
-    cl_f1,
-    cl_acc,
-    cfg,
-):
-
+def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short, fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
-
-    fig, (ax_f1, ax_acc) = plt.subplots(
-        1,
-        2,
-        figsize=(13, 4.8),
-    )
-
-    plt.subplots_adjust(
-        wspace=0.30,
-        left=0.07,
-        right=0.82,
-        top=0.85,
-        bottom=0.14,
-    )
-    original_client_counts = np.asarray(
-        results["client_counts"]
-    )
-
-    # Remove K=4 from the FIGURE ONLY.
-    # The K=4 results remain untouched in the checkpoint.
+    fig, (ax_f1, ax_acc) = plt.subplots(1, 2, figsize=(13, 4.8))
+    plt.subplots_adjust(wspace=0.30, left=0.07, right=0.82, top=0.85, bottom=0.14)
+    original_client_counts = np.asarray(results["client_counts"])
     exclude_clients = {4}
-
-    # Find indices of client counts that we want to keep
-    keep_idx = np.array([
-        i for i, n in enumerate(original_client_counts)
-        if n not in exclude_clients
-    ])
-
-    # Sort the remaining clients numerically
-    sort_idx = keep_idx[
-        np.argsort(original_client_counts[keep_idx])
-    ]
-
-    # Final client counts shown in the figure
+    keep_idx = np.array([i for i, n in enumerate(original_client_counts) if n not in exclude_clients])
+    sort_idx = keep_idx[np.argsort(original_client_counts[keep_idx])]
     client_counts = original_client_counts[sort_idx]
-
-    # Equally spaced positions on the x-axis
     x_pos = np.arange(len(client_counts))
-
-    # Labels shown on x-axis
-    x_labels = [
-        str(int(n))
-        for n in client_counts
-    ]
-
-
-    markers = [
-        "o",
-        "s",
-        "^",
-        "v",
-        "D",
-        "P",
-    ]
-
-    for ax, metric, cl_val, ylabel, ptitle in [
-
-        (
-            ax_f1,
-            "f1",
-            cl_f1,
-            "F1-Score",
-            "(a) F1-Score",
-        ),
-
-        (
-            ax_acc,
-            "acc",
-            cl_acc,
-            "Accuracy",
-            "(b) Accuracy",
-        ),
-
-    ]:
-
-        ax.set_facecolor(
-            "white"
-        )
-
-
-        cl_vals_original = np.asarray(
-            results[f"CL_{metric}_mean"]
-        )
-
-        # safety check
-        if len(cl_vals_original) != len(
-            original_client_counts
-        ):
-            raise ValueError(
-                f"CL_{metric}_mean has "
-                f"{len(cl_vals_original)} entries, "
-                f"but client_counts has "
-                f"{len(original_client_counts)} entries."
-            )
-
-        cl_vals = cl_vals_original[
-            sort_idx
-        ]
-
-        ax.plot(
-            x_pos,
-            cl_vals,
-            color=C_CL,
-            lw=2.2,
-            marker="D",
-            markersize=5.5,
-            markeredgecolor="white",
-            markeredgewidth=0.6,
-            label="CL (compute-equalised)",
-            zorder=4,
-        )
-
-        for idx, level in enumerate(
-            levels
-        ):
-
-            key_mean = (
-                f"FL_{metric}_mean_"
-                f"{level_key_prefix}_{level:.2f}"
-            )
-
-            key_std = (
-                f"FL_{metric}_std_"
-                f"{level_key_prefix}_{level:.2f}"
-            )
-
+    x_labels = [str(int(n)) for n in client_counts]
+    markers = ["o", "s", "^", "v", "D", "P"]
+    for ax, metric, cl_val, ylabel, ptitle in [(ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"), (ax_acc, "acc", cl_acc, "Accuracy", "(b) Accuracy")]:
+        ax.set_facecolor("white")
+        cl_vals_original = np.asarray(results[f"CL_{metric}_mean"])
+        if len(cl_vals_original) != len(original_client_counts):
+            raise ValueError(f"CL_{metric}_mean has {len(cl_vals_original)} entries, but client_counts has {len(original_client_counts)} entries.")
+        cl_vals = cl_vals_original[sort_idx]
+        ax.plot(x_pos, cl_vals, color=C_CL, lw=2.2, marker="D", markersize=5.5, markeredgecolor="white", markeredgewidth=0.6, label="CL (compute-equalised)", zorder=4)
+        for idx, level in enumerate(levels):
+            key_mean = f"FL_{metric}_mean_{level_key_prefix}_{level:.2f}"
+            key_std = f"FL_{metric}_std_{level_key_prefix}_{level:.2f}"
             if key_mean not in results:
-                print(
-                    f"  [warn] {key_mean} not found "
-                    f"— skipping this line"
-                )
+                print(f"  [warn] {key_mean} not found — skipping this line")
                 continue
-
             if key_std not in results:
-                print(
-                    f"  [warn] {key_std} not found "
-                    f"— skipping this line"
-                )
+                print(f"  [warn] {key_std} not found — skipping this line")
                 continue
-
-            means_original = np.asarray(
-                results[key_mean]
-            )
-
-            stds_original = np.asarray(
-                results[key_std]
-            )
-
-            if len(means_original) != len(
-                original_client_counts
-            ):
-                print(
-                    f"  [warn] {key_mean} has "
-                    f"{len(means_original)} entries but "
-                    f"client_counts has "
-                    f"{len(original_client_counts)} "
-                    f"— skipping this line"
-                )
+            means_original = np.asarray(results[key_mean])
+            stds_original = np.asarray(results[key_std])
+            if len(means_original) != len(original_client_counts):
+                print(f"  [warn] {key_mean} has {len(means_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
                 continue
-
-            if len(stds_original) != len(
-                original_client_counts
-            ):
-                print(
-                    f"  [warn] {key_std} has "
-                    f"{len(stds_original)} entries but "
-                    f"client_counts has "
-                    f"{len(original_client_counts)} "
-                    f"— skipping this line"
-                )
+            if len(stds_original) != len(original_client_counts):
+                print(f"  [warn] {key_std} has {len(stds_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
                 continue
-
-
-            means = means_original[
-                sort_idx
-            ]
-
-            stds = stds_original[
-                sort_idx
-            ]
-
-            c = pal[
-                idx % len(pal)
-            ]
-
-            marker = markers[
-                idx % len(markers)
-            ]
-
-            ax.plot(
-                x_pos,
-                means,
-                color=c,
-                lw=1.9,
-                marker=marker,
-                markersize=5.5,
-                markeredgecolor="white",
-                markeredgewidth=0.5,
-                linestyle="--",
-                label=(
-                    f"FL  {dist_label_short}="
-                    f"{level:.2f}"
-                ),
-                zorder=3,
-            )
-
-            ax.fill_between(
-                x_pos,
-                means - stds,
-                means + stds,
-                color=c,
-                alpha=0.10,
-                zorder=1,
-            )
-
-        ax.set_xticks(
-            x_pos
-        )
-
-        ax.set_xticklabels(
-            x_labels,
-            fontsize=9,
-        )
-
-        ax.set_ylim(
-            0.0,
-            cl_val + 0.12,
-        )
-
-        ax.yaxis.set_major_formatter(
-            ticker.FormatStrFormatter(
-                "%.2f"
-            )
-        )
-
-        ax.tick_params(
-            direction="out",
-            length=4,
-        )
-
-        for sp in [
-            "top",
-            "right",
-        ]:
-            ax.spines[
-                sp
-            ].set_visible(False)
-
-        ax.set_title(
-            ptitle,
-            fontsize=11,
-            fontweight="bold",
-        )
-
-        ax.set_xlabel(
-            "Number of Clients",
-            labelpad=6,
-        )
-
-        ax.set_ylabel(
-            ylabel,
-            labelpad=6,
-        )
-
-    handles, labels = (
-        ax_acc.get_legend_handles_labels()
-    )
-
-    legend = fig.legend(
-        handles,
-        labels,
-        loc="center left",
-        bbox_to_anchor=(
-            0.83,
-            0.50,
-        ),
-        borderaxespad=0,
-        frameon=True,
-        framealpha=1.0,
-        fancybox=False,
-        edgecolor="#CCC",
-        fontsize=9,
-        handlelength=2.2,
-    )
-
-    legend.get_frame().set_linewidth(
-        0.8
-    )
-    # figure titel
-    fig.suptitle(
-        f"Figure {fig_letter} — "
-        f"F1 & Accuracy vs Number of Clients  [RAVDESS]\n"
-        f"(fixed modality {dist_label_short}, "
-        f"α_label={cfg.ALPHA_LABEL_FIXED}, "
-        f"mean ± std {len(cfg.SEEDS)} seeds)",
-        fontsize=10,
-        fontweight="bold",
-        y=1.01,
-    )
-
-    # ============================================================
-    # SAVE
-    # ============================================================
-
-    _savefig(
-        fig,
-        filename,
-        cfg,
-    )
-
+            means = means_original[sort_idx]
+            stds = stds_original[sort_idx]
+            c = pal[idx % len(pal)]
+            marker = markers[idx % len(markers)]
+            ax.plot(x_pos, means, color=c, lw=1.9, marker=marker, markersize=5.5, markeredgecolor="white", markeredgewidth=0.5, linestyle="--", label=(f"FL  {dist_label_short}={level:.2f}"), zorder=3)
+            ax.fill_between(x_pos, means - stds, means + stds, color=c, alpha=0.10, zorder=1)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(x_labels, fontsize=9)
+        ax.set_ylim(0.0, cl_val + 0.12)
+        ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
+        ax.tick_params(direction="out", length=4)
+        for sp in ["top", "right"]:
+            ax.spines[sp].set_visible(False)
+        ax.set_title(ptitle, fontsize=11, fontweight="bold")
+        ax.set_xlabel("Number of Clients", labelpad=6)
+        ax.set_ylabel(ylabel, labelpad=6)
+    handles, labels = (ax_acc.get_legend_handles_labels())
+    legend = fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.83, 0.50), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.2)
+    legend.get_frame().set_linewidth(0.8)
+    fig.suptitle(f"Figure {fig_letter} — F1 & Accuracy vs Number of Clients  [RAVDESS]\n(fixed modality {dist_label_short}, Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
+    _savefig(fig, filename, cfg)
     plt.close(fig)
-# helper for saving the results
+
+
 def _pick(point, *names):
-    """
-    Return the first present key among `names`.
-
-    Handles cases such as:
-        'acc'
-        'acc_mean'
-    """
-
     for n in names:
-
-        if (
-            n in point
-            and point[n] is not None
-        ):
+        if (n in point and point[n] is not None):
             return point[n]
+    raise KeyError(f"none of {names} found in point: {list(point.keys())}")
 
-    raise KeyError(
-        f"none of {names} found in point: "
-        f"{list(point.keys())}"
-    )
-# save results
-def save_results(
-    cl_f1,
-    cl_acc,
-    sweep_results_full,
-    results_jsd,
-    results_hd,
-    out_path,
-    cfg,
-):
 
-    print(
-        "\n"
-        + "═" * 60
-    )
-
-    print(
-        "STEP 6 — Saving results"
-    )
-
-    print(
-        "═" * 60
-    )
-
+def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out_path, cfg):
+    print("\n" + "═" * 60)
+    print("STEP 6 — Saving results")
+    print("═" * 60)
     lines = [
-
         "# RAVDESS results",
-
-        f"# alpha_label FIXED = "
-        f"{cfg.ALPHA_LABEL_FIXED}",
-
-        f"# Seeds: "
-        f"{cfg.SEEDS}",
-
+        f"# alpha_label FIXED = {cfg.ALPHA_LABEL_FIXED}",
+        f"# Seeds: {cfg.SEEDS}",
         "",
-
-        f"CL_F1  = "
-        f"{round(cl_f1, 4)}",
-
-        f"CL_ACC = "
-        f"{round(cl_acc, 4)}",
-
+        f"CL_F1  = {round(cl_f1, 4)}",
+        f"CL_ACC = {round(cl_acc, 4)}",
         "",
-
-        f"ALPHA_LABEL_FIXED = "
-        f"{cfg.ALPHA_LABEL_FIXED}",
-
+        f"ALPHA_LABEL_FIXED = {cfg.ALPHA_LABEL_FIXED}",
         "",
-
-        f"SWEEP_RESULTS_FULL = "
-        f"{json.dumps(sweep_results_full, indent=4)}",
-
+        f"SWEEP_RESULTS_FULL = {json.dumps(sweep_results_full, indent=4)}",
         "",
-
-        f"RESULTS_VS_CLIENTS_JSD = "
-        f"{json.dumps(results_jsd, indent=4)}",
-
+        f"RESULTS_VS_CLIENTS_JSD = {json.dumps(results_jsd, indent=4)}",
         "",
-
-        f"RESULTS_VS_CLIENTS_HD  = "
-        f"{json.dumps(results_hd, indent=4)}",
+        f"RESULTS_VS_CLIENTS_HD  = {json.dumps(results_hd, indent=4)}",
     ]
-
-    with open(
-        out_path,
-        "w",
-    ) as f:
-
-        f.write(
-            "\n".join(lines)
-        )
-
-    print(
-        f"  Saved to: {out_path}"
-    )
-
+    with open(out_path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  Saved to: {out_path}")
 # main
 def main():
     parser = argparse.ArgumentParser(description="RAVDESS multimodal FL pipeline")
