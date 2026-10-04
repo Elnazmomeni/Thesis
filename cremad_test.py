@@ -63,7 +63,7 @@ def build_config(args):
     cfg.IMAGES_DIR = args.images_dir
 
     cfg.RANDOM_STATE = 42
-    cfg.SEEDS = [42]
+    cfg.SEEDS = [1, 42, 123, 512, 999]
     cfg.NUM_CLASSES = 6
     cfg.BATCH_SIZE = 64
 
