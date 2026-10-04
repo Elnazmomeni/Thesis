@@ -87,10 +87,10 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 5
+    cfg.ALPHA_LABEL_FIXED = 0.5
 
-    cfg.ALPHA_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30, 50]
   
     #fixed JSD snd HD levels
