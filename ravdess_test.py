@@ -1160,17 +1160,17 @@ def main():
     cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
 
     # alpha sweep
-    print("\nRunning Step 3 (alpha sweep)")
-    sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_e3_05_4.pkl")
-
-    plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
-                             "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
-    plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
-                             "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
-
-    print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
-    print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
+    #print("\nRunning Step 3 (alpha sweep)")
+    #sweep_results_full = run_alpha_sweep_full(
+    #    img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_e3_05_4.pkl")
+#
+    #plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
+    #                         "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
+    #plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
+    #                         "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
+#
+    #print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
+    #print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
     # client sweep
     results_jsd_tail, results_hd_tail = run_client_sweep(
@@ -1192,7 +1192,7 @@ def main():
         print(f"  target={h:.2f}  achieved_mean_per_client_count="
               f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
 
-    save_results(cl_f1, cl_acc, sweep_results_full, results_jsd_tail, results_hd_tail,
+    save_results(cl_f1, cl_acc, results_jsd_tail, results_hd_tail,
                  args.results_out, cfg)
 
     print("\nAll done.")
