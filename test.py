@@ -3,11 +3,8 @@ import argparse
 import copy
 import gc
 import json
-import math
-import numbers
 import os
 import pickle
-import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -17,12 +14,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import f1_score, accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-# controlling numpy seed overflow issue
+
+# controling numpy seed overflow issue
 import numpy as _np
+import numbers
 
 _NUMPY_SEED_MAX = 2**32 - 1
 
@@ -49,9 +48,10 @@ if not getattr(_np.random, "_seed_guard_installed", False):
 
 
 # import fl classes
+import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fedartml_local"))
-from fedartml_patch import SplitAsFederatedData
 from fl_modality_heterogeneity import ModalityHeterogeneity
+from fedartml_patch import SplitAsFederatedData
 
 
 # configuration
@@ -62,12 +62,9 @@ def build_config(args):
     cfg.IMAGES_DIR = args.images_dir
 
     cfg.RANDOM_STATE = 42
-    cfg.SEEDS = [13, 37, 256, 1337, 8675309]
+    cfg.SEEDS =[13, 37, 256, 8675309]
     cfg.NUM_CLASSES = 8
-    
-    # Centralized batch size vs Local FL batch size
     cfg.BATCH_SIZE = 64
-    cfg.FL_BATCH_SIZE = 16  # Reduced batch size for client local training to provide more gradient steps
 
     cfg.IMG_SIZE = 64
     cfg.IMG_DIM = cfg.IMG_SIZE * cfg.IMG_SIZE * 3
@@ -84,21 +81,20 @@ def build_config(args):
     cfg.NUM_CLIENTS = 10
     cfg.FL_ROUNDS = 100
     cfg.FL_ROUNDS_CLIENTS = 100
-    cfg.FL_LOCAL_EPOCHS = 1
+    cfg.FL_LOCAL_EPOCHS = 3
     cfg.FL_LR = 5e-4
-    cfg.FL_WARMUP_ROUNDS = 10  # Warmup learning rate over early rounds to escape local minima
-
+    cfg.FL_BATCH_SIZE = 128
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 1000
+    cfg.ALPHA_LABEL_FIXED = 0.5
 
-    cfg.ALPHA_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.1, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 30]
   
-    # fixed JSD and HD levels
-    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.45]
+    #fixed JSD snd HD levels
+    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.41]
     cfg.FIXED_HD_LEVELS  = [0.02, 0.10, 0.25, 0.35, 0.45, 0.70]
 
     cfg.MAX_PER_CLASS_ALPHA_SWEEP = 20
@@ -108,7 +104,7 @@ def build_config(args):
         "05": 4, "06": 5, "07": 6, "08": 7,
     }
     cfg.EMOTION_NAMES = ["neutral", "calm", "happy", "sad",
-                         "angry", "fearful", "disgust", "surprised"]
+                          "angry", "fearful", "disgust", "surprised"]
 
     os.makedirs(cfg.IMAGES_DIR, exist_ok=True)
 
@@ -116,12 +112,13 @@ def build_config(args):
     return cfg
 
 
-# make sure random seed stays in our range
+ # make sure  random seed stays in our range
 def _fedartml_safe_seed(random_state: int, cfg) -> int:
     return int(random_state) % cfg.FEDARTML_SEED_CAP
 
 
 # feature extraction
+
 def extract_audio_features(vid_path, cfg):
     import librosa
     y, sr = librosa.load(vid_path, sr=16000, mono=True)
@@ -239,6 +236,8 @@ def load_ravdess(ravdess_path, cache_path, cfg, test_ratio=0.2):
 
 
 # model architecture
+
+# image model
 class ImageBranch(nn.Module):
     def __init__(self, cfg, embed_dim=128, use_batchnorm=False):
         super().__init__()
@@ -262,8 +261,10 @@ class ImageBranch(nn.Module):
  
     def forward(self, x):
         return self.net(x)
+ 
+ 
 
-
+# audio model
 class AudioBranch(nn.Module):
     def __init__(self, input_dim, embed_dim=128, use_batchnorm=False):
         super().__init__()
@@ -281,8 +282,8 @@ class AudioBranch(nn.Module):
  
     def forward(self, x):
         return self.net(x)
-
  
+# multimodel
 class MultimodalNet(nn.Module):
     def __init__(self, cfg, num_classes, embed_dim=128, aud_input_dim=None,
                  use_batchnorm=False):
@@ -297,14 +298,24 @@ class MultimodalNet(nn.Module):
  
     def forward(self, img, aud):
         return self.classifier(torch.cat([self.img_branch(img), self.aud_branch(aud)], dim=1))
-
-
+ 
+ 
+# create the model
 def make_model(cfg, use_batchnorm=False):
+    """
+    use_batchnorm=True  -> CL baseline (full, stable batch sizes; BatchNorm
+                            gives its normal, usually-better performance)
+    use_batchnorm=False -> everything federated (client models can see
+                            tiny/degenerate batches; GroupNorm avoids the
+                            running-stats corruption seen in the CREMA-D
+                            client=4 collapse)
+    """
     return MultimodalNet(cfg, num_classes=cfg.NUM_CLASSES, embed_dim=128,
                           aud_input_dim=cfg.AUD_DIM,
                           use_batchnorm=use_batchnorm).to(cfg.DEVICE)
 
 
+# convert the data to a PyTorch dataset
 def make_tensor_dataset(img, aud, labels):
     return TensorDataset(
         torch.from_numpy(img).float(),
@@ -313,6 +324,7 @@ def make_tensor_dataset(img, aud, labels):
     )
 
 
+# split the training data between clients
 def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cfg, random_state=42):
     fedartml_seed = _fedartml_safe_seed(random_state, cfg)
     federater = SplitAsFederatedData(random_state=fedartml_seed)
@@ -341,6 +353,7 @@ def partition_data_fedartml(img_tr, aud_tr, lbl_tr, num_clients, alpha_label, cf
     return partitions, label_jsd, label_hd
 
 
+# build the client datasets
 def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
                            alpha_label=None, num_clients=None, random_state=42):
     if alpha_label is None:
@@ -367,6 +380,7 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
         modality_arrays=modality_arrays, y=all_lbl, num_clients=num_clients,
         alpha=alpha_modal, prefix_cli="client")
 
+    # free the unused variables to reduce memory usage for the ram problem
     del partitions, all_img, all_aud, all_lbl
     gc.collect()
 
@@ -392,21 +406,24 @@ def build_client_datasets(img_tr, aud_tr, lbl_tr, alpha_modal, cfg,
             torch.from_numpy(c_entry["y"]).long(),
         ))
 
+    # free the unused variables to reduce memory usage for the ram problem
     del joint_data
     gc.collect()
 
+    # heterogeneity scores on the split data
     scores = mh.compute_modality_heterogeneity_score(client_data_combined)
     modal_jsd = scores["mean_js_divergence"]
     modal_hd = scores["mean_hellinger"]
 
+    # free the unused variables to reduce memory usage for the ram problem
     del client_data_combined
     gc.collect()
 
     return client_datasets, modal_jsd, modal_hd, label_jsd, label_hd, client_order
 
 
-# find alpha values for target heterogeneity
-_ALPHA_CACHE = {}
+# find alpha values for the target heterogeneity
+_ALPHA_CACHE = {} # store the alpha values found before
 def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_seeds=None):
     if probe_seeds is None:
         probe_seeds = cfg.SEEDS
@@ -415,11 +432,12 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     if key in _ALPHA_CACHE:
         return _ALPHA_CACHE[key]
 
+    # search 70 alpha candidates, 50 across 0.01–10 for existing levels and 20 for 10 to 1000 to cover near IID targets
     candidates = np.concatenate([
         np.logspace(-2, 1, 50),
         np.logspace(1, 3, 21)[1:],
     ])
-    n_candidates = len(candidates)
+    n_candidates = len(candidates)  #70
     best_alpha, best_diff = candidates[0], 1e9 
 
     print(f"    [{kind.upper()} search] target={target:.4f}  num_clients={num_clients}  "
@@ -450,9 +468,11 @@ def _find_alpha(kind, target, num_clients, img_tr, aud_tr, lbl_tr, cfg, probe_se
     _ALPHA_CACHE[key] = best_alpha
     return best_alpha
 
+# alpha for JSD
 def find_alpha_for_jsd(target_jsd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("jsd", target_jsd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
+# alpha for HD
 def find_alpha_for_hd(target_hd, num_clients, random_state, cfg, img_tr, aud_tr, lbl_tr):
     return _find_alpha("hd", target_hd, num_clients, img_tr, aud_tr, lbl_tr, cfg)
 
@@ -460,6 +480,7 @@ def find_alpha_for_hd(target_hd, num_clients, random_state, cfg, img_tr, aud_tr,
 # training and evaluation
 criterion = nn.CrossEntropyLoss()
 
+# train for one epoch
 def train_one_epoch(model, loader, optimizer, cfg):
     model.train()
     for img, aud, lbl in loader:
@@ -468,6 +489,7 @@ def train_one_epoch(model, loader, optimizer, cfg):
         criterion(model(img, aud), lbl).backward()
         optimizer.step()
 
+# evaluate the model
 @torch.no_grad()
 def evaluate(model, loader, cfg):
     model.eval()
@@ -480,6 +502,7 @@ def evaluate(model, loader, cfg):
     acc = float(accuracy_score(all_labels, all_preds))
     return f1, acc
 
+# train the centralized base
 def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
     print("\n" + "═" * 60)
     print("STEP 2 — Centralised (CL) training  [compute-equalised]")
@@ -512,14 +535,14 @@ def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
         torch.cuda.empty_cache()
     return cl_f1, cl_acc
 
+# get the parameter keys for each model branch
 def _get_branch_keys(state_dict):
     img_keys = [k for k in state_dict if k.startswith("img_branch")]
     aud_keys = [k for k in state_dict if k.startswith("aud_branch")]
     clf_keys = [k for k in state_dict if k.startswith("classifier")]
     return img_keys, aud_keys, clf_keys
 
-
-# train the model with FedAvg + Warmup/Cosine LR Schedule + Scaled Local Batch Sizes
+# train the model with FedAvg
 def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs=None, lr=None,
                   eval_every=None):
     if fl_rounds is None:
@@ -535,20 +558,11 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     sample_weights = np.array([len(ds) for ds in client_datasets], dtype=np.float64)
     sample_weights /= sample_weights.sum()
 
-    MIN_CLIENT_SAMPLES = 2
+    MIN_CLIENT_SAMPLES = max(2, cfg.FL_BATCH_SIZE // 4)
     any_round_trained = False
     checkpoints = {}
 
-    warmup_rounds = getattr(cfg, "FL_WARMUP_ROUNDS", 10)
-
     for rnd in tqdm(range(fl_rounds), desc="      FedAvg rounds", leave=False):
-        # 1. Learning Rate Schedule (Warmup + Cosine Decay)
-        if rnd < warmup_rounds:
-            current_lr = lr * (rnd + 1) / warmup_rounds
-        else:
-            progress = (rnd - warmup_rounds) / max(1, fl_rounds - warmup_rounds)
-            current_lr = 1e-5 + 0.5 * (lr - 1e-5) * (1.0 + math.cos(math.pi * progress))
-
         global_sd = global_model.state_dict()
         img_keys, aud_keys, clf_keys = _get_branch_keys(global_sd)
         all_keys = img_keys + aud_keys + clf_keys
@@ -561,17 +575,12 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         for c_i, c_ds in enumerate(client_datasets):
             if len(c_ds) < MIN_CLIENT_SAMPLES:
                 continue
-
-            # 2. Dynamic batch size based on dataset size for smaller clients
-            local_batch_size = min(getattr(cfg, "FL_BATCH_SIZE", 16), max(2, len(c_ds) // 2))
-
             local_model.load_state_dict(copy.deepcopy(global_sd))
-            loader = DataLoader(c_ds, batch_size=local_batch_size, shuffle=True,
+            loader = DataLoader(c_ds, batch_size=cfg.FL_BATCH_SIZE, shuffle=True,
                                  num_workers=0, drop_last=False)
             if len(loader) == 0:
                 continue
-            
-            opt = optim.Adam(local_model.parameters(), lr=current_lr, weight_decay=1e-4)
+            opt = optim.Adam(local_model.parameters(), lr=lr, weight_decay=1e-4)
             for _ in range(local_epochs):
                 train_one_epoch(local_model, loader, opt, cfg)
 
@@ -611,9 +620,9 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         return result, checkpoints
     return result
 
-
+# alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_test.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_e3_05_all.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -624,6 +633,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
         make_tensor_dataset(img_te, aud_te, lbl_te),
         batch_size=8, shuffle=False, num_workers=0)
  
+    # try to resume with checkpoints
     results_by_alpha = {}
     done = set()
     try:
@@ -710,7 +720,8 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
  
     all_results = [results_by_alpha[round(float(a), 6)] for a in cfg.ALPHA_MODAL_SWEEP]
     return all_results
-
+ 
+#clients sweep
 
 def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
                       fixed_jsd_levels, fixed_hd_levels, cfg, checkpoint_path):
@@ -736,6 +747,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
         results_jsd = ckpt.get("results_jsd")
         results_hd = ckpt.get("results_hd")
         done = set(ckpt.get("done", set()))
+         # add the missing result keys when resume from an older checkpoint
         if results_jsd is not None:
             for j in fixed_jsd_levels:
                 results_jsd.setdefault(f"FL_f1_mean_JSD_{j:.2f}", [])
@@ -903,44 +915,73 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
     return results_jsd, results_hd
 
 
-# plots
+#plots
+
 C_CL = "#D62728"
 C_FL_F1 = "#1F77B4"
 C_FL_ACC = "#FF7F0E"
-JSD_PAL = ["#1A9850", "#66BD63", "#A6D96A", "#FEE08B", "#FC8D59", "#8C2D82"]
-HD_PAL = ["#08306B", "#08519C", "#2171B5", "#4292C6", "#6A51A3", "#3F007D"]
+
+JSD_PAL = [
+    "#1B9E77",  # JSD = 0.01
+    "#66A61E",  # JSD = 0.05
+    "#A6D854",  # JSD = 0.15
+    "#E6AB02",  # JSD = 0.30
+    "#E66101",  # JSD = 0.38
+    "#7B3294",  # JSD = 0.41
+]
+
+HD_PAL = [
+    "#0072B2",  # HD = 0.02 — blue
+    "#E69F00",  # HD = 0.10 — orange
+    "#009E73",  # HD = 0.25 — green
+    "#CC79A7",  # HD = 0.35 — pink/purple
+    "#D55E00",  # HD = 0.45 — vermillion
+    "#6A3D9A",  # HD = 0.70 — dark purple
+]
 
 BASE_RC = {
-    "figure.facecolor": "white", "axes.facecolor": "white",
-    "axes.edgecolor": "#333", "axes.spines.top": False,
-    "axes.spines.right": False, "font.family": "sans-serif",
-    "font.size": 10, "axes.titlesize": 11, "axes.labelsize": 10,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "axes.edgecolor": "#333",
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "font.family": "sans-serif",
+    "font.size": 10,
+    "axes.titlesize": 11,
+    "axes.labelsize": 10,
     "legend.fontsize": 9,
 }
 
 
 def _savefig(fig, name, cfg):
     path = os.path.join(cfg.IMAGES_DIR, name)
-    fig.savefig(path, dpi=200, bbox_inches="tight", facecolor="white")
-    print(f"  Saved: {path}")
 
+    fig.savefig(
+        path,
+        dpi=200,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+    print(f"  Saved: {path}")
 
 def _merge_close_ticks(dist_vals, alphas, min_sep_frac=0.025, axis_range=1.0):
     min_sep = min_sep_frac * axis_range
     groups = []
-    cur_x, cur_a = [dist_vals[0]], [alphas[0]]
+    cur_x = [dist_vals[0]]
+    cur_a = [alphas[0]]
     for xv, a in zip(dist_vals[1:], alphas[1:]):
         if xv - cur_x[-1] < min_sep:
             cur_x.append(xv)
             cur_a.append(a)
         else:
             groups.append((cur_x, cur_a))
-            cur_x, cur_a = [xv], [a]
+            cur_x = [xv]
+            cur_a = [a]
     groups.append((cur_x, cur_a))
     tick_pos = [float(np.mean(g[0])) for g in groups]
-    tick_lab = ["/".join(str(a) for a in g[1]) for g in groups]
+    tick_lab = ["/".join(str(a) for a in sorted(g[1], reverse=True)) for g in groups]
     return tick_pos, tick_lab
-
 
 def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
@@ -950,7 +991,6 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     f1_stds = [r["f1_std"] for r in sweep_results]
     acc_means = [r["acc_mean"] for r in sweep_results]
     acc_stds = [r["acc_std"] for r in sweep_results]
-
     order = np.argsort(dist_vals)
     alphas = [alphas[i] for i in order]
     dist_vals = [dist_vals[i] for i in order]
@@ -959,17 +999,14 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     acc_means = np.array([acc_means[i] for i in order])
     acc_stds = np.array([acc_stds[i] for i in order])
     x = np.array(dist_vals)
-
     fig, ax = plt.subplots(figsize=(9, 4.8))
     plt.subplots_adjust(top=0.74, bottom=0.13, left=0.09, right=0.72)
     lw = 2.0
     ax.axhline(cl_f1, color=C_CL, lw=lw, label="CL — F1-Score")
     ax.axhline(cl_acc, color="#2CA02C", lw=lw, label="CL — Accuracy")
-    ax.plot(x, f1_means, color=C_FL_F1, lw=lw, linestyle="--", marker="^", markersize=7,
-            label="FL (FedAvg) — F1-Score")
+    ax.plot(x, f1_means, color=C_FL_F1, lw=lw, linestyle="--", marker="^", markersize=7, label="FL (FedAvg) — F1-Score")
     ax.fill_between(x, f1_means - f1_stds, f1_means + f1_stds, color=C_FL_F1, alpha=0.15)
-    ax.plot(x, acc_means, color=C_FL_ACC, lw=lw, linestyle="--", marker="D", markersize=6,
-            label="FL (FedAvg) — Accuracy")
+    ax.plot(x, acc_means, color=C_FL_ACC, lw=lw, linestyle="--", marker="D", markersize=6, label="FL (FedAvg) — Accuracy")
     ax.fill_between(x, acc_means - acc_stds, acc_means + acc_stds, color=C_FL_ACC, alpha=0.15)
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.05)
@@ -983,58 +1020,60 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     tick_pos, tick_lab = _merge_close_ticks(dist_vals, alphas)
     ax2.set_xticks(tick_pos)
     ax2.set_xticklabels(tick_lab, fontsize=8, color="#444", rotation=45, ha="left")
-    ax2.set_xlabel(f"Dirichlet α_modal\n[α_label = {cfg.ALPHA_LABEL_FIXED} fixed]",
-                   fontsize=9, color="#444", labelpad=10)
+    ax2.set_xlabel(f"Dirichlet β\n[Dirichlet α = {cfg.ALPHA_LABEL_FIXED} fixed]", fontsize=9, color="#444", labelpad=10)
     ax2.tick_params(colors="#444", direction="out", length=4, pad=3)
     for sp in ax2.spines.values():
         sp.set_color("#AAAAAA")
     ax2.spines["top"].set_visible(True)
-    legend = ax.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), borderaxespad=0,
-                        frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC",
-                        fontsize=9, handlelength=2.0)
+    legend = ax.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.0)
     legend.get_frame().set_linewidth(0.8)
-    ax.set_title(f"Figure {fig_letter} — F1 & Accuracy vs {dist_label}  [RAVDESS]\n"
-                 f"(α_label={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)",
-                 fontsize=11, fontweight="bold", pad=40)
+    ax.set_title(f"Figure {fig_letter} — F1 & Accuracy vs {dist_label}  [RAVDESS]\n(Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=11, fontweight="bold", pad=40)
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
 
-def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short,
-                              fig_letter, filename, cl_f1, cl_acc, cfg):
+def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short, fig_letter, filename, cl_f1, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
     fig, (ax_f1, ax_acc) = plt.subplots(1, 2, figsize=(13, 4.8))
     plt.subplots_adjust(wspace=0.30, left=0.07, right=0.82, top=0.85, bottom=0.14)
-
-    client_counts = results["client_counts"]
+    original_client_counts = np.asarray(results["client_counts"])
+    exclude_clients = {4}
+    keep_idx = np.array([i for i, n in enumerate(original_client_counts) if n not in exclude_clients])
+    sort_idx = keep_idx[np.argsort(original_client_counts[keep_idx])]
+    client_counts = original_client_counts[sort_idx]
     x_pos = np.arange(len(client_counts))
-    x_labels = [str(n) for n in client_counts]
+    x_labels = [str(int(n)) for n in client_counts]
     markers = ["o", "s", "^", "v", "D", "P"]
-
-    for ax, metric, cl_val, ylabel, ptitle in [
-        (ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"),
-        (ax_acc, "acc", cl_acc, "Accuracy", "(b) Accuracy"),
-    ]:
+    for ax, metric, cl_val, ylabel, ptitle in [(ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"), (ax_acc, "acc", cl_acc, "Accuracy", "(b) Accuracy")]:
         ax.set_facecolor("white")
-        cl_vals = np.array(results[f"CL_{metric}_mean"])
-        ax.plot(x_pos, cl_vals, color=C_CL, lw=2.2, marker="D", markersize=5.5,
-                markeredgecolor="white", markeredgewidth=0.6, label="CL (compute-equalised)", zorder=3)
+        cl_vals_original = np.asarray(results[f"CL_{metric}_mean"])
+        if len(cl_vals_original) != len(original_client_counts):
+            raise ValueError(f"CL_{metric}_mean has {len(cl_vals_original)} entries, but client_counts has {len(original_client_counts)} entries.")
+        cl_vals = cl_vals_original[sort_idx]
+        ax.plot(x_pos, cl_vals, color=C_CL, lw=2.2, marker="D", markersize=5.5, markeredgecolor="white", markeredgewidth=0.6, label="CL (compute-equalised)", zorder=4)
         for idx, level in enumerate(levels):
             key_mean = f"FL_{metric}_mean_{level_key_prefix}_{level:.2f}"
             key_std = f"FL_{metric}_std_{level_key_prefix}_{level:.2f}"
             if key_mean not in results:
+                print(f"  [warn] {key_mean} not found — skipping this line")
                 continue
-            means = np.array(results[key_mean])
-            stds = np.array(results[key_std])
-            if len(means) != len(x_pos):
-                print(f"  [warn] {key_mean} has {len(means)} entries but client_counts has "
-                      f"{len(x_pos)} — skipping this line")
+            if key_std not in results:
+                print(f"  [warn] {key_std} not found — skipping this line")
                 continue
+            means_original = np.asarray(results[key_mean])
+            stds_original = np.asarray(results[key_std])
+            if len(means_original) != len(original_client_counts):
+                print(f"  [warn] {key_mean} has {len(means_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
+                continue
+            if len(stds_original) != len(original_client_counts):
+                print(f"  [warn] {key_std} has {len(stds_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
+                continue
+            means = means_original[sort_idx]
+            stds = stds_original[sort_idx]
             c = pal[idx % len(pal)]
-            ax.plot(x_pos, means, color=c, lw=1.8, marker=markers[idx % len(markers)], markersize=5,
-                    markeredgecolor="white", markeredgewidth=0.5, linestyle="--",
-                    label=f"FL  {dist_label_short}={level:.2f}", zorder=2)
-            ax.fill_between(x_pos, means - stds, means + stds, color=c, alpha=0.12)
+            marker = markers[idx % len(markers)]
+            ax.plot(x_pos, means, color=c, lw=1.9, marker=marker, markersize=5.5, markeredgecolor="white", markeredgewidth=0.5, linestyle="--", label=(f"FL  {dist_label_short}={level:.2f}"), zorder=3)
+            ax.fill_between(x_pos, means - stds, means + stds, color=c, alpha=0.10, zorder=1)
         ax.set_xticks(x_pos)
         ax.set_xticklabels(x_labels, fontsize=9)
         ax.set_ylim(0.0, cl_val + 0.12)
@@ -1045,17 +1084,19 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
         ax.set_title(ptitle, fontsize=11, fontweight="bold")
         ax.set_xlabel("Number of Clients", labelpad=6)
         ax.set_ylabel(ylabel, labelpad=6)
-
-    handles, labels = ax_acc.get_legend_handles_labels()
-    legend = fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.83, 0.50),
-                         borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False,
-                         edgecolor="#CCC", fontsize=9, handlelength=2.0)
+    handles, labels = (ax_acc.get_legend_handles_labels())
+    legend = fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.83, 0.50), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.2)
     legend.get_frame().set_linewidth(0.8)
-    fig.suptitle(f"Figure {fig_letter} — F1 & Accuracy vs Number of Clients  [RAVDESS]\n"
-                 f"(fixed modality {dist_label_short}, α_label={cfg.ALPHA_LABEL_FIXED}, "
-                 f"mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
+    fig.suptitle(f"Figure {fig_letter} — F1 & Accuracy vs Number of Clients  [RAVDESS]\n(fixed modality {dist_label_short}, Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
     _savefig(fig, filename, cfg)
     plt.close(fig)
+
+
+def _pick(point, *names):
+    for n in names:
+        if (n in point and point[n] is not None):
+            return point[n]
+    raise KeyError(f"none of {names} found in point: {list(point.keys())}")
 
 
 def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out_path, cfg):
@@ -1081,23 +1122,22 @@ def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out
     with open(out_path, "w") as f:
         f.write("\n".join(lines))
     print(f"  Saved to: {out_path}")
-
-
 # main
 def main():
     parser = argparse.ArgumentParser(description="RAVDESS multimodal FL pipeline")
     parser.add_argument("--ravdess-path", default="./RAVDESS",
-                         help="Path to the downloaded RAVDESS dataset")
+                         help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_test",
+    parser.add_argument("--images-dir", default="./images_ravdess_128_e3_05_all",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_test.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_e3_05_all.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_test.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_128_e3_05_all.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
-                         help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'.")
+                         help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
+                              "Defaults to 'cuda' (first visible GPU) if available, else 'cpu'.")
     args = parser.parse_args()
 
     cfg = build_config(args)
@@ -1106,7 +1146,7 @@ def main():
     np.random.seed(cfg.RANDOM_STATE)
 
     print("=" * 60)
-    print("RAVDESS — Multimodal FL Pipeline")
+    print("RAVDESS — Multimodal FL Pipeline (fresh start)")
     print(f"  Device : {cfg.DEVICE}")
     if cfg.DEVICE == "cuda":
         print(f"  GPU    : {torch.cuda.get_device_name(0)}")
@@ -1122,7 +1162,7 @@ def main():
     # alpha sweep
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_test.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_e3_05_all.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
@@ -1137,8 +1177,7 @@ def main():
         img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
         fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
         cfg=cfg, checkpoint_path=args.checkpoint_path)
-
-    # plots
+    #plots
     plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
                               "D1", "figD1_client_sweep_jsd.png", cl_f1, cl_acc, cfg)
     plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",
