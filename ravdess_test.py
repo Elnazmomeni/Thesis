@@ -87,7 +87,7 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 0.5
+    cfg.ALPHA_LABEL_FIXED = 1000
 
     cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
@@ -1099,7 +1099,7 @@ def _pick(point, *names):
     raise KeyError(f"none of {names} found in point: {list(point.keys())}")
 
 
-def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out_path, cfg):
+def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path, cfg):
     print("\n" + "═" * 60)
     print("STEP 6 — Saving results")
     print("═" * 60)
@@ -1112,8 +1112,6 @@ def save_results(cl_f1, cl_acc, sweep_results_full, results_jsd, results_hd, out
         f"CL_ACC = {round(cl_acc, 4)}",
         "",
         f"ALPHA_LABEL_FIXED = {cfg.ALPHA_LABEL_FIXED}",
-        "",
-        f"SWEEP_RESULTS_FULL = {json.dumps(sweep_results_full, indent=4)}",
         "",
         f"RESULTS_VS_CLIENTS_JSD = {json.dumps(results_jsd, indent=4)}",
         "",
@@ -1129,11 +1127,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_128_e3_05_4",
+    parser.add_argument("--images-dir", default="./images_ravdess_128_e3_1000_4",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_e3_05.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_e3_1000_4.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_128_e3_05_4.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_128_e3_1000_4.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
