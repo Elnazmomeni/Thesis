@@ -91,7 +91,7 @@ def build_config(args):
 
     cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.CLIENT_SWEEP = [4, 6, 10, 20, 30]
+    cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30]
   
     #fixed JSD snd HD levels
     cfg.FIXED_JSD_LEVELS = []
@@ -1129,7 +1129,7 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_ravdess_128_iid_60",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60_new.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60_iid.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
     parser.add_argument("--results-out", default="./results_output_ravdess_128_iid_60_new.py",
                          help="Where to write the final results summary")
