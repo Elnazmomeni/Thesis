@@ -1190,7 +1190,7 @@ def main():
         print(f"  target={h:.2f}  achieved_mean_per_client_count="
               f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
 
-    save_results(cl_f1, cl_acc, results_jsd_tail, results_hd_tail,
+    save_results(cl_f1, cl_acc, sweep_results_full, results_jsd_tail, results_hd_tail,
                  args.results_out, cfg)
 
     print("\nAll done.")
