@@ -87,15 +87,15 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 5
+    cfg.ALPHA_LABEL_FIXED = 1000
 
     cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [4, 6, 10, 20, 30]
   
     #fixed JSD snd HD levels
-    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.41]
-    cfg.FIXED_HD_LEVELS  = [0.02, 0.10, 0.25, 0.35, 0.45, 0.70]
+    cfg.FIXED_JSD_LEVELS = []
+    cfg.FIXED_HD_LEVELS  = [0.70]
 
     cfg.MAX_PER_CLASS_ALPHA_SWEEP = 20
 
@@ -1127,11 +1127,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_128_05",
+    parser.add_argument("--images-dir", default="./images_ravdess_128_iid_60",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_05.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_128_05.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_128_iid_60.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
@@ -1158,15 +1158,15 @@ def main():
     cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
 
     # alpha sweep
-    print("\nRunning Step 3 (alpha sweep)")
-    sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_05.pkl")
-
-    plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
-                             "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
-    plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
-                             "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
-
+    #print("\nRunning Step 3 (alpha sweep)")
+    #sweep_results_full = run_alpha_sweep_full(
+    #    img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_05.pkl")
+#
+    #plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
+    #                         "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
+    #plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
+    #                         "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
+#
     print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
@@ -1190,7 +1190,7 @@ def main():
         print(f"  target={h:.2f}  achieved_mean_per_client_count="
               f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
 
-    save_results(cl_f1, cl_acc, sweep_results_full, results_jsd_tail, results_hd_tail,
+    save_results(cl_f1, cl_acc, results_jsd_tail, results_hd_tail,
                  args.results_out, cfg)
 
     print("\nAll done.")
