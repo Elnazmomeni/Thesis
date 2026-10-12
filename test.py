@@ -95,7 +95,7 @@ def build_config(args):
   
     #fixed JSD snd HD levels
     cfg.FIXED_JSD_LEVELS = []
-    cfg.FIXED_HD_LEVELS  = [0.70]
+    cfg.FIXED_HD_LEVELS  = [0.60]
 
     cfg.MAX_PER_CLASS_ALPHA_SWEEP = 20
 
@@ -1129,9 +1129,9 @@ def main():
                          help="Where to cache extracted audio/image features")
     parser.add_argument("--images-dir", default="./images_ravdess_128_iid_60",
                          help="Where to save output figures")
-    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60.pkl",
+    parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60_new.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_128_iid_60.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_128_iid_60_new.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
