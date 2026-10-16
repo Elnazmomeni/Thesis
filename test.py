@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -89,13 +89,14 @@ def build_config(args):
 
     cfg.ALPHA_LABEL_FIXED = 1000
 
-    cfg.ALPHA_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
-    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
+    cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30]
   
     #fixed JSD snd HD levels
-    cfg.FIXED_JSD_LEVELS = []
-    cfg.FIXED_HD_LEVELS  = [0.60]
+    cfg.FIXED_JSD_LEVELS = [0.01, 0.05, 0.15, 0.30, 0.38, 0.45]
+    cfg.FIXED_HD_LEVELS  = [0.02, 0.10, 0.25, 0.35, 0.45, 0.60]
+
 
     cfg.MAX_PER_CLASS_ALPHA_SWEEP = 20
 
@@ -489,7 +490,7 @@ def train_one_epoch(model, loader, optimizer, cfg):
         criterion(model(img, aud), lbl).backward()
         optimizer.step()
 
-# evaluate the model
+# evaluate the model (accuracy only)
 @torch.no_grad()
 def evaluate(model, loader, cfg):
     model.eval()
@@ -498,9 +499,7 @@ def evaluate(model, loader, cfg):
         preds = model(img.to(cfg.DEVICE), aud.to(cfg.DEVICE)).argmax(dim=1).cpu().numpy()
         all_preds.extend(preds)
         all_labels.extend(lbl.numpy())
-    f1 = float(f1_score(all_labels, all_preds, average="macro", zero_division=0))
-    acc = float(accuracy_score(all_labels, all_preds))
-    return f1, acc
+    return float(accuracy_score(all_labels, all_preds))
 
 # train the centralized base
 def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
@@ -525,15 +524,15 @@ def train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg):
         train_one_epoch(model, train_loader, optimizer, cfg)
         scheduler.step()
         if (epoch + 1) % 10 == 0:
-            f1, acc = evaluate(model, test_loader, cfg)
-            print(f"  Epoch {epoch+1:3d}:  F1={f1:.4f}  Acc={acc:.4f}")
+            acc = evaluate(model, test_loader, cfg)
+            print(f"  Epoch {epoch+1:3d}:  Acc={acc:.4f}")
 
-    cl_f1, cl_acc = evaluate(model, test_loader, cfg)
-    print(f"\n  CL final:  F1={cl_f1:.4f}   Acc={cl_acc:.4f}")
+    cl_acc = evaluate(model, test_loader, cfg)
+    print(f"\n  CL final:  Acc={cl_acc:.4f}")
     del model, optimizer, scheduler
     if cfg.DEVICE == "cuda":
         torch.cuda.empty_cache()
-    return cl_f1, cl_acc
+    return cl_acc
 
 # get the parameter keys for each model branch
 def _get_branch_keys(state_dict):
@@ -603,9 +602,9 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
         gc.collect()
 
         if eval_every and (rnd + 1) % eval_every == 0:
-            f1, acc = evaluate(global_model, test_loader, cfg)
-            checkpoints[rnd + 1] = (f1, acc)
-            print(f"    [round {rnd+1}] F1={f1:.4f} Acc={acc:.4f}")
+            acc = evaluate(global_model, test_loader, cfg)
+            checkpoints[rnd + 1] = acc
+            print(f"    [round {rnd+1}] Acc={acc:.4f}")
 
     if not any_round_trained:
         print(f"    [WARNING] train_fedavg: no client ever had >= {MIN_CLIENT_SAMPLES} "
@@ -621,7 +620,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
     return result
 
 # alpha sweep
-def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg,
+def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg,
                           checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_05.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
@@ -658,7 +657,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
             continue
  
         print(f"\n  alpha_modal = {alpha_modal}   [{i+1}/{len(cfg.ALPHA_MODAL_SWEEP)}]")
-        seed_f1s, seed_accs = [], []
+        seed_accs = []
         seed_modal_jsds, seed_modal_hds = [], []
         seed_label_jsds, seed_label_hds = [], []
  
@@ -674,12 +673,11 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
                 num_clients=cfg.NUM_CLIENTS,
                 random_state=_fedartml_safe_seed(seed, cfg))
  
-            fl_f1, fl_acc = train_fedavg(client_ds, test_loader, cfg,
-                                          fl_rounds=cfg.FL_ROUNDS,
-                                          local_epochs=cfg.FL_LOCAL_EPOCHS,
-                                          lr=cfg.FL_LR)
+            fl_acc = train_fedavg(client_ds, test_loader, cfg,
+                                   fl_rounds=cfg.FL_ROUNDS,
+                                   local_epochs=cfg.FL_LOCAL_EPOCHS,
+                                   lr=cfg.FL_LR)
  
-            seed_f1s.append(fl_f1)
             seed_accs.append(fl_acc)
             seed_modal_jsds.append(modal_jsd)
             seed_modal_hds.append(modal_hd)
@@ -691,14 +689,14 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
             if cfg.DEVICE == "cuda":
                 torch.cuda.empty_cache()
  
-        print(f"    Mean F1={np.mean(seed_f1s):.4f}  Acc={np.mean(seed_accs):.4f}  "
+        print(f"    Mean Acc={np.mean(seed_accs):.4f}  "
               f"modal_JSD={np.mean(seed_modal_jsds):.4f}  modal_HD={np.mean(seed_modal_hds):.4f}")
  
         results_by_alpha[alpha_key] = {
             "alpha_modal": alpha_modal,
             "alpha_label": cfg.ALPHA_LABEL_FIXED,
             "seeds": cfg.SEEDS,
-            "f1": seed_f1s, "acc": seed_accs,
+            "acc": seed_accs,
             "modal_jsd": seed_modal_jsds, "modal_hd": seed_modal_hds,
             "label_jsd": seed_label_jsds, "label_hd": seed_label_hds,
             "modal_jsd_mean": float(np.mean(seed_modal_jsds)),
@@ -709,8 +707,6 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
             "label_jsd_std": float(np.std(seed_label_jsds)),
             "label_hd_mean": float(np.mean(seed_label_hds)),
             "label_hd_std": float(np.std(seed_label_hds)),
-            "f1_mean": float(np.mean(seed_f1s)),
-            "f1_std": float(np.std(seed_f1s)),
             "acc_mean": float(np.mean(seed_accs)),
             "acc_std": float(np.std(seed_accs)),
         }
@@ -723,7 +719,7 @@ def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, 
  
 #clients sweep
 
-def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
+def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc,
                       fixed_jsd_levels, fixed_hd_levels, cfg, checkpoint_path):
     assert fixed_jsd_levels is not None and fixed_hd_levels is not None, \
         "Set FIXED_JSD_LEVELS / FIXED_HD_LEVELS before running Step 4."
@@ -750,8 +746,6 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
          # add the missing result keys when resume from an older checkpoint
         if results_jsd is not None:
             for j in fixed_jsd_levels:
-                results_jsd.setdefault(f"FL_f1_mean_JSD_{j:.2f}", [])
-                results_jsd.setdefault(f"FL_f1_std_JSD_{j:.2f}", [])
                 results_jsd.setdefault(f"FL_acc_mean_JSD_{j:.2f}", [])
                 results_jsd.setdefault(f"FL_acc_std_JSD_{j:.2f}", [])
                 results_jsd.setdefault(f"achieved_jsd_mean_{j:.2f}", [])
@@ -759,8 +753,6 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 
         if results_hd is not None:
             for h in fixed_hd_levels:
-                results_hd.setdefault(f"FL_f1_mean_HD_{h:.2f}", [])
-                results_hd.setdefault(f"FL_f1_std_HD_{h:.2f}", [])
                 results_hd.setdefault(f"FL_acc_mean_HD_{h:.2f}", [])
                 results_hd.setdefault(f"FL_acc_std_HD_{h:.2f}", [])
                 results_hd.setdefault(f"achieved_hd_mean_{h:.2f}", [])
@@ -771,22 +763,18 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
         print("  [resume] no usable checkpoint found — starting fresh")
 
     if results_jsd is None:
-        results_jsd = {"CL_f1_mean": [], "CL_acc_mean": [], "client_counts": [],
+        results_jsd = {"CL_acc_mean": [], "client_counts": [],
                         "alpha_label": cfg.ALPHA_LABEL_FIXED}
         for j in fixed_jsd_levels:
-            results_jsd[f"FL_f1_mean_JSD_{j:.2f}"] = []
-            results_jsd[f"FL_f1_std_JSD_{j:.2f}"] = []
             results_jsd[f"FL_acc_mean_JSD_{j:.2f}"] = []
             results_jsd[f"FL_acc_std_JSD_{j:.2f}"] = []
             results_jsd[f"achieved_jsd_mean_{j:.2f}"] = []
             results_jsd[f"achieved_jsd_std_{j:.2f}"] = []
 
     if results_hd is None:
-        results_hd = {"CL_f1_mean": [], "CL_acc_mean": [], "client_counts": [],
+        results_hd = {"CL_acc_mean": [], "client_counts": [],
                        "hd_levels_used": fixed_hd_levels, "alpha_label": cfg.ALPHA_LABEL_FIXED}
         for h in fixed_hd_levels:
-            results_hd[f"FL_f1_mean_HD_{h:.2f}"] = []
-            results_hd[f"FL_f1_std_HD_{h:.2f}"] = []
             results_hd[f"FL_acc_mean_HD_{h:.2f}"] = []
             results_hd[f"FL_acc_std_HD_{h:.2f}"] = []
             results_hd[f"achieved_hd_mean_{h:.2f}"] = []
@@ -810,7 +798,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                 run_idx += len(cfg.SEEDS)
                 continue
 
-            seed_f1s, seed_accs, seed_act_jsds = [], [], []
+            seed_accs, seed_act_jsds = [], []
             for seed in cfg.SEEDS:
                 run_idx += 1
                 torch.manual_seed(seed)
@@ -824,24 +812,21 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                     alpha_label=cfg.ALPHA_LABEL_FIXED, num_clients=n_clients,
                     random_state=_fedartml_safe_seed(seed, cfg))
 
-                fl_f1, fl_acc = train_fedavg(client_ds, test_loader, cfg,
-                                              fl_rounds=cfg.FL_ROUNDS_CLIENTS,
-                                              local_epochs=cfg.FL_LOCAL_EPOCHS, lr=cfg.FL_LR)
+                fl_acc = train_fedavg(client_ds, test_loader, cfg,
+                                       fl_rounds=cfg.FL_ROUNDS_CLIENTS,
+                                       local_epochs=cfg.FL_LOCAL_EPOCHS, lr=cfg.FL_LR)
 
-                seed_f1s.append(fl_f1)
                 seed_accs.append(fl_acc)
                 seed_act_jsds.append(act_jsd)
                 print(f"  [{run_idx:3d}/{total_runs}]  clients={n_clients:<4}  JSD_tgt={jsd_level:.2f}  "
                       f"JSD_achieved={act_jsd:.4f}  label_JSD={label_jsd:.4f}  seed={seed}  "
-                      f"F1={fl_f1:.4f} Acc={fl_acc:.4f}")
+                      f"Acc={fl_acc:.4f}")
 
                 del client_ds
                 gc.collect()
                 if cfg.DEVICE == "cuda":
                     torch.cuda.empty_cache()
 
-            results_jsd[f"FL_f1_mean_JSD_{jsd_level:.2f}"].append(round(float(np.mean(seed_f1s)), 4))
-            results_jsd[f"FL_f1_std_JSD_{jsd_level:.2f}"].append(round(float(np.std(seed_f1s)), 4))
             results_jsd[f"FL_acc_mean_JSD_{jsd_level:.2f}"].append(round(float(np.mean(seed_accs)), 4))
             results_jsd[f"FL_acc_std_JSD_{jsd_level:.2f}"].append(round(float(np.std(seed_accs)), 4))
             results_jsd[f"achieved_jsd_mean_{jsd_level:.2f}"].append(round(float(np.mean(seed_act_jsds)), 4))
@@ -858,7 +843,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                 run_idx += len(cfg.SEEDS)
                 continue
 
-            seed_f1s, seed_accs, seed_act_hds = [], [], []
+            seed_accs, seed_act_hds = [], []
             for seed in cfg.SEEDS:
                 run_idx += 1
                 torch.manual_seed(seed)
@@ -872,24 +857,21 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
                     alpha_label=cfg.ALPHA_LABEL_FIXED, num_clients=n_clients,
                     random_state=_fedartml_safe_seed(seed, cfg))
 
-                fl_f1, fl_acc = train_fedavg(client_ds, test_loader, cfg,
-                                              fl_rounds=cfg.FL_ROUNDS_CLIENTS,
-                                              local_epochs=cfg.FL_LOCAL_EPOCHS, lr=cfg.FL_LR)
+                fl_acc = train_fedavg(client_ds, test_loader, cfg,
+                                       fl_rounds=cfg.FL_ROUNDS_CLIENTS,
+                                       local_epochs=cfg.FL_LOCAL_EPOCHS, lr=cfg.FL_LR)
 
-                seed_f1s.append(fl_f1)
                 seed_accs.append(fl_acc)
                 seed_act_hds.append(act_hd)
                 print(f"  [{run_idx:3d}/{total_runs}]  clients={n_clients:<4}  HD_tgt={hd_level:.2f}  "
                       f"HD_achieved={act_hd:.4f}  label_JSD={label_jsd:.4f}  seed={seed}  "
-                      f"F1={fl_f1:.4f} Acc={fl_acc:.4f}")
+                      f"Acc={fl_acc:.4f}")
 
                 del client_ds
                 gc.collect()
                 if cfg.DEVICE == "cuda":
                     torch.cuda.empty_cache()
 
-            results_hd[f"FL_f1_mean_HD_{hd_level:.2f}"].append(round(float(np.mean(seed_f1s)), 4))
-            results_hd[f"FL_f1_std_HD_{hd_level:.2f}"].append(round(float(np.std(seed_f1s)), 4))
             results_hd[f"FL_acc_mean_HD_{hd_level:.2f}"].append(round(float(np.mean(seed_accs)), 4))
             results_hd[f"FL_acc_std_HD_{hd_level:.2f}"].append(round(float(np.std(seed_accs)), 4))
             results_hd[f"achieved_hd_mean_{hd_level:.2f}"].append(round(float(np.mean(seed_act_hds)), 4))
@@ -901,11 +883,9 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 
         if n_clients not in results_jsd["client_counts"]:
             results_jsd["client_counts"].append(n_clients)
-            results_jsd["CL_f1_mean"].append(round(cl_f1, 4))
             results_jsd["CL_acc_mean"].append(round(cl_acc, 4))
         if n_clients not in results_hd["client_counts"]:
             results_hd["client_counts"].append(n_clients)
-            results_hd["CL_f1_mean"].append(round(cl_f1, 4))
             results_hd["CL_acc_mean"].append(round(cl_acc, 4))
         _checkpoint()
 
@@ -917,8 +897,7 @@ def run_client_sweep(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_a
 
 #plots
 
-C_CL = "#D62728"
-C_FL_F1 = "#1F77B4"
+C_CL = "#2CA02C"
 C_FL_ACC = "#FF7F0E"
 
 JSD_PAL = [
@@ -983,29 +962,22 @@ def _merge_close_ticks(dist_vals, alphas, min_sep_frac=0.025, axis_range=1.0):
     tick_lab = ["/".join(str(a) for a in sorted(g[1], reverse=True)) for g in groups]
     return tick_pos, tick_lab
 
-def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_f1, cl_acc, cfg):
+def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, filename, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
     alphas = [r["alpha_modal"] for r in sweep_results]
     dist_vals = [r[dist_key] for r in sweep_results]
-    f1_means = [r["f1_mean"] for r in sweep_results]
-    f1_stds = [r["f1_std"] for r in sweep_results]
     acc_means = [r["acc_mean"] for r in sweep_results]
     acc_stds = [r["acc_std"] for r in sweep_results]
     order = np.argsort(dist_vals)
     alphas = [alphas[i] for i in order]
     dist_vals = [dist_vals[i] for i in order]
-    f1_means = np.array([f1_means[i] for i in order])
-    f1_stds = np.array([f1_stds[i] for i in order])
     acc_means = np.array([acc_means[i] for i in order])
     acc_stds = np.array([acc_stds[i] for i in order])
     x = np.array(dist_vals)
     fig, ax = plt.subplots(figsize=(9, 4.8))
     plt.subplots_adjust(top=0.74, bottom=0.13, left=0.09, right=0.72)
     lw = 2.0
-    ax.axhline(cl_f1, color=C_CL, lw=lw, label="CL — F1-Score")
-    ax.axhline(cl_acc, color="#2CA02C", lw=lw, label="CL — Accuracy")
-    ax.plot(x, f1_means, color=C_FL_F1, lw=lw, linestyle="--", marker="^", markersize=7, label="FL (FedAvg) — F1-Score")
-    ax.fill_between(x, f1_means - f1_stds, f1_means + f1_stds, color=C_FL_F1, alpha=0.15)
+    ax.axhline(cl_acc, color=C_CL, lw=lw, label="CL — Accuracy")
     ax.plot(x, acc_means, color=C_FL_ACC, lw=lw, linestyle="--", marker="D", markersize=6, label="FL (FedAvg) — Accuracy")
     ax.fill_between(x, acc_means - acc_stds, acc_means + acc_stds, color=C_FL_ACC, alpha=0.15)
     ax.set_xlim(0.0, 1.0)
@@ -1027,15 +999,15 @@ def plot_alpha_sweep_figure(sweep_results, dist_key, dist_label, fig_letter, fil
     ax2.spines["top"].set_visible(True)
     legend = ax.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.0)
     legend.get_frame().set_linewidth(0.8)
-    ax.set_title(f"Figure {fig_letter} — F1 & Accuracy vs {dist_label}  [RAVDESS]\n(Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=11, fontweight="bold", pad=40)
+    ax.set_title(f"Figure {fig_letter} — Accuracy vs {dist_label}  [RAVDESS]\n(Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=11, fontweight="bold", pad=40)
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
 
-def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short, fig_letter, filename, cl_f1, cl_acc, cfg):
+def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_short, fig_letter, filename, cl_acc, cfg):
     plt.rcParams.update(BASE_RC)
-    fig, (ax_f1, ax_acc) = plt.subplots(1, 2, figsize=(13, 4.8))
-    plt.subplots_adjust(wspace=0.30, left=0.07, right=0.82, top=0.85, bottom=0.14)
+    fig, ax = plt.subplots(1, 1, figsize=(9, 4.8))
+    plt.subplots_adjust(left=0.09, right=0.70, top=0.85, bottom=0.14)
     original_client_counts = np.asarray(results["client_counts"])
     exclude_clients = {4}
     keep_idx = np.array([i for i, n in enumerate(original_client_counts) if n not in exclude_clients])
@@ -1044,50 +1016,50 @@ def plot_client_sweep_figure(results, level_key_prefix, levels, pal, dist_label_
     x_pos = np.arange(len(client_counts))
     x_labels = [str(int(n)) for n in client_counts]
     markers = ["o", "s", "^", "v", "D", "P"]
-    for ax, metric, cl_val, ylabel, ptitle in [(ax_f1, "f1", cl_f1, "F1-Score", "(a) F1-Score"), (ax_acc, "acc", cl_acc, "Accuracy", "(b) Accuracy")]:
-        ax.set_facecolor("white")
-        cl_vals_original = np.asarray(results[f"CL_{metric}_mean"])
-        if len(cl_vals_original) != len(original_client_counts):
-            raise ValueError(f"CL_{metric}_mean has {len(cl_vals_original)} entries, but client_counts has {len(original_client_counts)} entries.")
-        cl_vals = cl_vals_original[sort_idx]
-        ax.plot(x_pos, cl_vals, color=C_CL, lw=2.2, marker="D", markersize=5.5, markeredgecolor="white", markeredgewidth=0.6, label="CL (compute-equalised)", zorder=4)
-        for idx, level in enumerate(levels):
-            key_mean = f"FL_{metric}_mean_{level_key_prefix}_{level:.2f}"
-            key_std = f"FL_{metric}_std_{level_key_prefix}_{level:.2f}"
-            if key_mean not in results:
-                print(f"  [warn] {key_mean} not found — skipping this line")
-                continue
-            if key_std not in results:
-                print(f"  [warn] {key_std} not found — skipping this line")
-                continue
-            means_original = np.asarray(results[key_mean])
-            stds_original = np.asarray(results[key_std])
-            if len(means_original) != len(original_client_counts):
-                print(f"  [warn] {key_mean} has {len(means_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
-                continue
-            if len(stds_original) != len(original_client_counts):
-                print(f"  [warn] {key_std} has {len(stds_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
-                continue
-            means = means_original[sort_idx]
-            stds = stds_original[sort_idx]
-            c = pal[idx % len(pal)]
-            marker = markers[idx % len(markers)]
-            ax.plot(x_pos, means, color=c, lw=1.9, marker=marker, markersize=5.5, markeredgecolor="white", markeredgewidth=0.5, linestyle="--", label=(f"FL  {dist_label_short}={level:.2f}"), zorder=3)
-            ax.fill_between(x_pos, means - stds, means + stds, color=c, alpha=0.10, zorder=1)
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(x_labels, fontsize=9)
-        ax.set_ylim(0.0, cl_val + 0.12)
-        ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
-        ax.tick_params(direction="out", length=4)
-        for sp in ["top", "right"]:
-            ax.spines[sp].set_visible(False)
-        ax.set_title(ptitle, fontsize=11, fontweight="bold")
-        ax.set_xlabel("Number of Clients", labelpad=6)
-        ax.set_ylabel(ylabel, labelpad=6)
-    handles, labels = (ax_acc.get_legend_handles_labels())
-    legend = fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.83, 0.50), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.2)
+
+    ax.set_facecolor("white")
+    cl_vals_original = np.asarray(results["CL_acc_mean"])
+    if len(cl_vals_original) != len(original_client_counts):
+        raise ValueError(f"CL_acc_mean has {len(cl_vals_original)} entries, but client_counts has {len(original_client_counts)} entries.")
+    cl_vals = cl_vals_original[sort_idx]
+    ax.plot(x_pos, cl_vals, color=C_CL, lw=2.2, marker="D", markersize=5.5, markeredgecolor="white", markeredgewidth=0.6, label="CL (compute-equalised)", zorder=4)
+    for idx, level in enumerate(levels):
+        key_mean = f"FL_acc_mean_{level_key_prefix}_{level:.2f}"
+        key_std = f"FL_acc_std_{level_key_prefix}_{level:.2f}"
+        if key_mean not in results:
+            print(f"  [warn] {key_mean} not found — skipping this line")
+            continue
+        if key_std not in results:
+            print(f"  [warn] {key_std} not found — skipping this line")
+            continue
+        means_original = np.asarray(results[key_mean])
+        stds_original = np.asarray(results[key_std])
+        if len(means_original) != len(original_client_counts):
+            print(f"  [warn] {key_mean} has {len(means_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
+            continue
+        if len(stds_original) != len(original_client_counts):
+            print(f"  [warn] {key_std} has {len(stds_original)} entries but client_counts has {len(original_client_counts)} — skipping this line")
+            continue
+        means = means_original[sort_idx]
+        stds = stds_original[sort_idx]
+        c = pal[idx % len(pal)]
+        marker = markers[idx % len(markers)]
+        ax.plot(x_pos, means, color=c, lw=1.9, marker=marker, markersize=5.5, markeredgecolor="white", markeredgewidth=0.5, linestyle="--", label=(f"FL  {dist_label_short}={level:.2f}"), zorder=3)
+        ax.fill_between(x_pos, means - stds, means + stds, color=c, alpha=0.10, zorder=1)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(x_labels, fontsize=9)
+    ax.set_ylim(0.0, cl_acc + 0.12)
+    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
+    ax.tick_params(direction="out", length=4)
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    ax.set_xlabel("Number of Clients", labelpad=6)
+    ax.set_ylabel("Accuracy", labelpad=6)
+
+    handles, labels = ax.get_legend_handles_labels()
+    legend = fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.72, 0.50), borderaxespad=0, frameon=True, framealpha=1.0, fancybox=False, edgecolor="#CCC", fontsize=9, handlelength=2.2)
     legend.get_frame().set_linewidth(0.8)
-    fig.suptitle(f"Figure {fig_letter} — F1 & Accuracy vs Number of Clients  [RAVDESS]\n(fixed modality {dist_label_short}, Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
+    fig.suptitle(f"Figure {fig_letter} — Accuracy vs Number of Clients  [RAVDESS]\n(fixed modality {dist_label_short}, Dirichlet α={cfg.ALPHA_LABEL_FIXED}, mean ± std {len(cfg.SEEDS)} seeds)", fontsize=10, fontweight="bold", y=1.01)
     _savefig(fig, filename, cfg)
     plt.close(fig)
 
@@ -1099,7 +1071,7 @@ def _pick(point, *names):
     raise KeyError(f"none of {names} found in point: {list(point.keys())}")
 
 
-def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path, cfg):
+def save_results(cl_acc, results_jsd, results_hd, out_path, cfg):
     print("\n" + "═" * 60)
     print("STEP 6 — Saving results")
     print("═" * 60)
@@ -1108,7 +1080,6 @@ def save_results(cl_f1, cl_acc, results_jsd, results_hd, out_path, cfg):
         f"# alpha_label FIXED = {cfg.ALPHA_LABEL_FIXED}",
         f"# Seeds: {cfg.SEEDS}",
         "",
-        f"CL_F1  = {round(cl_f1, 4)}",
         f"CL_ACC = {round(cl_acc, 4)}",
         "",
         f"ALPHA_LABEL_FIXED = {cfg.ALPHA_LABEL_FIXED}",
@@ -1155,31 +1126,31 @@ def main():
     (img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te) = load_ravdess(cfg.RAVDESS_PATH, cfg.CACHE_PATH, cfg)
 
     print("\nTraining RAVDESS (centralised baseline)")
-    cl_f1, cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
+    cl_acc = train_centralised(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cfg)
 
     # alpha sweep
-    #print("\nRunning Step 3 (alpha sweep)")
-    #sweep_results_full = run_alpha_sweep_full(
-    #    img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_05.pkl")
-#
-    #plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
-    #                         "B", "figB_alpha_sweep_jsd.png", cl_f1, cl_acc, cfg)
-    #plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
-    #                         "C", "figC_alpha_sweep_hd.png", cl_f1, cl_acc, cfg)
-#
+    print("\nRunning Step 3 (alpha sweep)")
+    sweep_results_full = run_alpha_sweep_full(
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_128_05.pkl")
+
+    plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
+                             "B", "figB_alpha_sweep_jsd.png", cl_acc, cfg)
+    plot_alpha_sweep_figure(sweep_results_full, "modal_hd_mean", "Hellinger Distance",
+                             "C", "figC_alpha_sweep_hd.png", cl_acc, cfg)
+
     print(f"\nfixed JSD levels = {cfg.FIXED_JSD_LEVELS}")
     print(f"fixed HD levels  = {cfg.FIXED_HD_LEVELS}")
 
     # client sweep
     results_jsd_tail, results_hd_tail = run_client_sweep(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_f1, cl_acc,
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc,
         fixed_jsd_levels=cfg.FIXED_JSD_LEVELS, fixed_hd_levels=cfg.FIXED_HD_LEVELS,
         cfg=cfg, checkpoint_path=args.checkpoint_path)
     #plots
     plot_client_sweep_figure(results_jsd_tail, "JSD", cfg.FIXED_JSD_LEVELS, JSD_PAL, "JSD",
-                              "D1", "figD1_client_sweep_jsd.png", cl_f1, cl_acc, cfg)
+                              "D1", "figD1_client_sweep_jsd.png", cl_acc, cfg)
     plot_client_sweep_figure(results_hd_tail, "HD", cfg.FIXED_HD_LEVELS, HD_PAL, "HD",
-                              "D2", "figD2_client_sweep_hd.png", cl_f1, cl_acc, cfg)
+                              "D2", "figD2_client_sweep_hd.png", cl_acc, cfg)
 
     print("\nCalibration check (JSD):")
     for j in cfg.FIXED_JSD_LEVELS:
@@ -1190,7 +1161,7 @@ def main():
         print(f"  target={h:.2f}  achieved_mean_per_client_count="
               f"{results_hd_tail[f'achieved_hd_mean_{h:.2f}']}")
 
-    save_results(cl_f1, cl_acc, results_jsd_tail, results_hd_tail,
+    save_results(cl_acc, results_jsd_tail, sweep_results_full, results_hd_tail,
                  args.results_out, cfg)
 
     print("\nAll done.")
