@@ -621,7 +621,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
 # alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1131,7 +1131,7 @@ def main():
     # alpha sweep
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_new.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_acc, cfg)
