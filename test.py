@@ -1130,7 +1130,7 @@ def main():
     # alpha sweep
     print("\nRunning Step 3 (alpha sweep)")
     sweep_results_full = run_alpha_sweep_full(
-        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww.pkl")
+        img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg, checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww_05.pkl")
 
     plot_alpha_sweep_figure(sweep_results_full, "modal_jsd_mean", "Jensen-Shannon Distance",
                              "B", "figB_alpha_sweep_jsd.png", cl_acc, cfg)
