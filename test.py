@@ -87,8 +87,7 @@ def build_config(args):
     cfg.CL_EQUIV_EPOCHS = cfg.FL_ROUNDS * cfg.FL_LOCAL_EPOCHS 
     cfg.CL_LR = 1e-3
 
-    cfg.ALPHA_LABEL_FIXED = 1000
-
+    cfg.ALPHA_LABEL_FIXED = 0.5
     cfg.ALPHA_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.ALPHA_MODAL_SWEEP = [0.01, 0.05, 0.2, 0.4, 0.8, 1.0, 3, 10, 1000]
     cfg.CLIENT_SWEEP = [2, 6, 10, 20, 30]
@@ -621,7 +620,7 @@ def train_fedavg(client_datasets, test_loader, cfg, fl_rounds=None, local_epochs
 
 # alpha sweep
 def run_alpha_sweep_full(img_tr, aud_tr, lbl_tr, img_te, aud_te, lbl_te, cl_acc, cfg,
-                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww.pkl"):
+                          checkpoint_path="./checkpoints/ravdess_alpha_sweep_newww_05.pkl"):
     print("\n" + "═" * 60)
     print("STEP 3 — Alpha-modal sweep [FULL dataset, checkpointed]")
     print(f"  alphas = {cfg.ALPHA_MODAL_SWEEP}   num_clients = {cfg.NUM_CLIENTS}   "
@@ -1098,11 +1097,11 @@ def main():
                          help="Path to the downloaded RAVDESS dataset (run download_ravdess.py first)")
     parser.add_argument("--cache-path", default="./ravdess_features",
                          help="Where to cache extracted audio/image features")
-    parser.add_argument("--images-dir", default="./images_ravdess_newww",
+    parser.add_argument("--images-dir", default="./images_ravdess_newww_05",
                          help="Where to save output figures")
     parser.add_argument("--checkpoint-path", default="./checkpoints/ravdess_client_sweep_128_iid_60_iid.pkl",
                          help="Client-sweep checkpoint (auto-resumes if this file exists)")
-    parser.add_argument("--results-out", default="./results_output_ravdess_newww.py",
+    parser.add_argument("--results-out", default="./results_output_ravdess_newww_05.py",
                          help="Where to write the final results summary")
     parser.add_argument("--device", default=None,
                          help="Which device to use, e.g. 'cuda:0', 'cuda:1', or 'cpu'. "
